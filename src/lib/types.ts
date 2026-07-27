@@ -11,6 +11,8 @@ export type CatalogItem = {
   backdropUrl: string | null;
   releaseDate: string | null;
   voteAverage: number;
+  voteCount: number;
+  popularity: number;
   genreIds: number[];
   originalLanguage: string;
 };

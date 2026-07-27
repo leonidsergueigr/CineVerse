@@ -3,12 +3,12 @@
 import Link from "next/link";
 import { ChevronRight, Heart, Play, Star } from "lucide-react";
 import { useMemo, useState, useTransition } from "react";
-import type { BrowseCatalog, CatalogItem, HomeCatalog, WatchProgress } from "@/lib/types";
+import type { BrowseCatalog, CatalogItem, HomeCatalog } from "@/lib/types";
 import { SiteHeader } from "@/components/site-header";
 
 type Props = {
   catalog: HomeCatalog;
-  continueWatching: WatchProgress[];
+  continueWatching: CatalogItem[];
 };
 
 export function CineVerseHome({ catalog, continueWatching }: Props) {
@@ -18,10 +18,9 @@ export function CineVerseHome({ catalog, continueWatching }: Props) {
   const heroBackground = hero.backdropUrl ?? hero.posterUrl;
 
   const sections = useMemo(() => {
-    const resumeItems = continueWatching.map(progressToCatalogItem);
     return [
-      ...(resumeItems.length
-        ? [{ id: "resume", title: "Reprendre la lecture", items: resumeItems }]
+      ...(continueWatching.length
+        ? [{ id: "resume", title: "Reprendre la lecture", items: continueWatching }]
         : []),
       ...catalog.sections,
     ];
@@ -191,9 +190,24 @@ function FilteredGrid({
   totalPages: number;
   totalResults: number;
 }) {
-  const sort = filters.sort ?? "new";
+  const sort = filters.sort ?? (filters.query ? "relevance" : "new");
   const sorted = useMemo(() => sortItems(items, sort), [items, sort]);
   const pageWindow = buildPageWindow(currentPage, totalPages);
+  const sortOptions = filters.query
+    ? [
+        ["relevance", "Pertinence"],
+        ["rating", "Les + Notes"],
+        ["popular", "Les + Regardes"],
+        ["new", "Nouveautes"],
+        ["az", "A-Z"],
+      ]
+    : [
+        ["new", "Nouveautes"],
+        ["rating", "Les + Notes"],
+        ["popular", "Les + Regardes"],
+        ["az", "A-Z"],
+        ["type", "Type"],
+      ];
 
   return (
     <section className="mb-12 border border-white/10 bg-[#101010] p-3 shadow-2xl sm:p-4">
@@ -204,13 +218,7 @@ function FilteredGrid({
         </span>
       </div>
       <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
-        {[
-          ["new", "Nouveautes"],
-          ["rating", "Les + Notes"],
-          ["popular", "Les + Regardes"],
-          ["az", "A-Z"],
-          ["type", "Type"],
-        ].map(([value, label]) => (
+        {sortOptions.map(([value, label]) => (
           <button
             key={value}
             type="button"
@@ -307,7 +315,9 @@ function MediaCard({
           )}
           <div className="absolute left-2 top-2 inline-flex h-8 items-center gap-1 rounded bg-black/85 px-2 text-xs font-black text-white shadow-lg ring-1 ring-white/20 backdrop-blur">
             <Star className="h-3.5 w-3.5 fill-[#f5c542] text-[#f5c542]" />
-            {item.voteAverage > 0 ? item.voteAverage.toFixed(1) : "N/A"}
+            {item.voteCount > 0 || item.voteAverage > 0
+              ? item.voteAverage.toFixed(1)
+              : "N/A"}
           </div>
           <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-black/80 to-transparent" />
         </div>
@@ -332,10 +342,11 @@ function MediaCard({
 
 function sortItems(items: CatalogItem[], sort: string) {
   return [...items].sort((a, b) => {
+    if (sort === "relevance") return 0;
     if (sort === "rating") return b.voteAverage - a.voteAverage;
     if (sort === "az") return a.title.localeCompare(b.title);
     if (sort === "type") return a.mediaType.localeCompare(b.mediaType);
-    if (sort === "popular") return b.voteAverage - a.voteAverage;
+    if (sort === "popular") return b.popularity - a.popularity;
     return yearOf(b.releaseDate).localeCompare(yearOf(a.releaseDate));
   });
 }
@@ -368,27 +379,6 @@ function buildPageWindow(currentPage: number, totalPages: number) {
     const previous = sorted[index - 1];
     return previous && page - previous > 1 ? (["gap", page] as const) : [page];
   });
-}
-
-function progressToCatalogItem(progress: WatchProgress): CatalogItem {
-  return {
-    id: progress.tmdbId,
-    mediaType: progress.mediaType,
-    title: progress.title,
-    overview: "",
-    posterPath: progress.posterPath,
-    backdropPath: progress.backdropPath,
-    posterUrl: progress.posterPath ? `https://image.tmdb.org/t/p/w342${progress.posterPath}` : null,
-    backdropUrl: progress.backdropPath
-      ? `https://image.tmdb.org/t/p/w1280${progress.backdropPath}`
-      : null,
-    releaseDate: null,
-    voteAverage: progress.durationSeconds
-      ? Math.round((progress.progressSeconds / progress.durationSeconds) * 100) / 10
-      : 0,
-    genreIds: [],
-    originalLanguage: "",
-  };
 }
 
 function yearOf(date: string | null) {

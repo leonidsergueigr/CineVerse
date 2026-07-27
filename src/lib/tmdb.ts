@@ -25,6 +25,8 @@ type TmdbResult = {
   release_date?: string;
   first_air_date?: string;
   vote_average?: number;
+  vote_count?: number;
+  popularity?: number;
   genre_ids?: number[];
   genres?: Array<{ id: number; name: string }>;
   original_language?: string;
@@ -112,6 +114,17 @@ export async function getBrowseCatalog(filters: CatalogFilters): Promise<BrowseC
     ...result,
     filters,
   };
+}
+
+export async function getCatalogItemsByIds(
+  requests: Array<{ id: number; mediaType: MediaType }>,
+) {
+  return Promise.all(
+    requests.map(async ({ id, mediaType }) => {
+      const data = await tmdb<TmdbResult>(`/${mediaType}/${id}`, {});
+      return data ? normalizeItem(data, mediaType) : null;
+    }),
+  );
 }
 
 export async function getTrending(mediaType: MediaType) {
@@ -367,6 +380,8 @@ function normalizeItem(result: TmdbResult, forcedType?: MediaType): CatalogItem 
     releaseDate:
       mediaType === "movie" ? result.release_date ?? null : result.first_air_date ?? null,
     voteAverage: Number((result.vote_average ?? 0).toFixed(1)),
+    voteCount: result.vote_count ?? 0,
+    popularity: result.popularity ?? 0,
     genreIds: result.genre_ids ?? result.genres?.map((genre) => genre.id) ?? [],
     originalLanguage: result.original_language ?? "na",
   };
