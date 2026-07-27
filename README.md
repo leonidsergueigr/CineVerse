@@ -33,7 +33,7 @@ La base SQLite est montee dans `./data/cineverse.sqlite`.
 
 ## Sources video
 
-Par defaut, CineVerse utilise un lecteur de demonstration local qui emet des evenements `postMessage` compatibles avec le suivi de progression. Pour brancher tes propres lecteurs ou services autorises, configure `CINEVERSE_EMBED_PROVIDERS_JSON` dans `.env`.
+Par defaut, CineVerse utilise un lecteur de demonstration local qui emet des evenements `postMessage` compatibles avec le suivi de progression. Pour brancher tes propres lecteurs ou services autorises, configure `CINEVERSE_EMBED_PROVIDERS_JSON` dans `.env`. Garde cette valeur sur une seule ligne, sinon Next et Docker ne liront que le premier `[` au runtime.
 
 Placeholders disponibles dans les templates:
 

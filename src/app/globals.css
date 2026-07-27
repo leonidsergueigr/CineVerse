@@ -59,8 +59,14 @@ select {
   font-size: 0.875rem;
   color: white;
   outline: none;
+  color-scheme: dark;
 }
 
 .filter-field:focus {
   border-color: #e50914;
+}
+
+.filter-field option {
+  background: #151515;
+  color: #f5f5f5;
 }

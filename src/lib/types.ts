@@ -34,8 +34,11 @@ export type CatalogSection = {
 
 export type HomeCatalog = {
   hero: CatalogItem;
+  heroTrailerUrl: string | null;
   sections: CatalogSection[];
   filters: CatalogFilters;
+  filteredItems: CatalogItem[];
+  isFiltered: boolean;
 };
 
 export type CatalogFilters = {

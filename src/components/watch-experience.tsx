@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowLeft, Heart, Languages, Server, Star } from "lucide-react";
+import { ArrowLeft, Heart, Languages, Play, Server, Star } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import type { EmbedProvider, MediaDetails, WatchProgress } from "@/lib/types";
 
@@ -24,6 +24,7 @@ export function WatchExperience({
   const [language, setLanguage] = useState("vostfr");
   const [season, setSeason] = useState(initialSeason ?? 1);
   const [episode, setEpisode] = useState(initialEpisode ?? 1);
+  const [started, setStarted] = useState(false);
   const [progress, setProgress] = useState({
     currentTime: initialProgress?.progressSeconds ?? 0,
     duration: initialProgress?.durationSeconds ?? 0,
@@ -99,6 +100,27 @@ export function WatchExperience({
     });
   }
 
+  function startPlayback() {
+    setStarted(true);
+    if (progress.currentTime > 0) return;
+
+    fetch("/api/progress", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        tmdbId: detail.id,
+        mediaType: detail.mediaType,
+        seasonNumber: detail.mediaType === "tv" ? season : null,
+        episodeNumber: detail.mediaType === "tv" ? episode : null,
+        title: detail.title,
+        posterPath: detail.posterPath,
+        backdropPath: detail.backdropPath,
+        progressSeconds: 1,
+        durationSeconds: progress.duration,
+      }),
+    });
+  }
+
   const percent = progress.duration ? Math.min(100, (progress.currentTime / progress.duration) * 100) : 0;
 
   return (
@@ -119,7 +141,7 @@ export function WatchExperience({
 
         <section className="grid min-h-screen grid-rows-[minmax(55vh,1fr)_auto]">
           <div className="relative bg-black">
-            {iframeUrl ? (
+            {started && iframeUrl ? (
               <iframe
                 key={iframeUrl}
                 src={iframeUrl}
@@ -128,11 +150,33 @@ export function WatchExperience({
                 className="h-full min-h-[55vh] w-full border-0"
                 title={`Lecteur ${detail.title}`}
               />
-            ) : (
+            ) : !iframeUrl ? (
               <div className="flex h-full min-h-[55vh] items-center justify-center bg-zinc-950 text-zinc-400">
                 Aucune source configuree
               </div>
-            )}
+            ) : null}
+            {!started && iframeUrl ? (
+              <div className="absolute inset-0 grid min-h-[55vh] place-items-center overflow-hidden bg-black">
+                {detail.backdropUrl ?? detail.posterUrl ? (
+                  <img
+                    src={detail.backdropUrl ?? detail.posterUrl ?? ""}
+                    alt=""
+                    className="absolute inset-0 h-full w-full object-cover opacity-45"
+                  />
+                ) : (
+                  <div className="poster-fallback absolute inset-0" />
+                )}
+                <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(229,9,20,.28),transparent_34%),linear-gradient(0deg,#050505,rgba(5,5,5,.45))]" />
+                <button
+                  type="button"
+                  onClick={startPlayback}
+                  className="relative z-10 inline-flex h-16 items-center gap-3 rounded bg-white px-8 text-base font-black text-black shadow-2xl transition hover:scale-105 hover:bg-zinc-200"
+                >
+                  <Play className="h-6 w-6 fill-black" />
+                  Play
+                </button>
+              </div>
+            ) : null}
             <div className="absolute inset-x-0 bottom-0 h-1 bg-white/15">
               <span className="block h-full bg-[#e50914]" style={{ width: `${percent}%` }} />
             </div>

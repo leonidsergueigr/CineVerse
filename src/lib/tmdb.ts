@@ -30,6 +30,18 @@ type TmdbList = {
   results?: TmdbResult[];
 };
 
+type TmdbVideo = {
+  key: string;
+  site: string;
+  type: string;
+  official?: boolean;
+  name?: string;
+};
+
+type TmdbVideos = {
+  results?: TmdbVideo[];
+};
+
 type TmdbDetails = TmdbResult & {
   runtime?: number;
   episode_run_time?: number[];
@@ -56,27 +68,32 @@ export async function getHomeCatalog(filters: CatalogFilters): Promise<HomeCatal
   const [trendingMovies, trendingTv, mood, filtered] = await Promise.all([
     getTrending("movie"),
     getTrending("tv"),
-    discover({
-      mediaType: "movie",
-      genre: "878",
-      minRating: "7",
-    }),
+    discover(
+      {
+        mediaType: "movie",
+        genre: "878",
+        minRating: "7",
+      },
+      true,
+    ),
     hasActiveFilters ? discover(filters) : Promise.resolve([]),
   ]);
 
   const sections = [
-    ...(filtered.length
-      ? [{ id: "filtered", title: "Selection affinee", items: filtered }]
-      : []),
     { id: "movies", title: "Films tendance", items: trendingMovies },
     { id: "series", title: "Series a devorer", items: trendingTv },
     { id: "mood", title: "Soiree science-fiction", items: mood },
   ];
+  const hero = filtered[0] ?? trendingMovies[0] ?? fallbackCatalog()[0];
+  const heroTrailerUrl = await getTrailerUrl(hero.mediaType, hero.id);
 
   return {
-    hero: filtered[0] ?? trendingMovies[0] ?? fallbackCatalog()[0],
+    hero,
+    heroTrailerUrl,
     sections,
     filters,
+    filteredItems: filtered,
+    isFiltered: hasActiveFilters,
   };
 }
 
@@ -85,9 +102,9 @@ export async function getTrending(mediaType: MediaType) {
   return normalizeList(data?.results, mediaType);
 }
 
-export async function discover(filters: CatalogFilters) {
+export async function discover(filters: CatalogFilters, withFallback = false) {
   if (filters.query) {
-    return search(filters.query, filters.mediaType);
+    return search(filters.query, filters.mediaType, withFallback);
   }
 
   const mediaType = filters.mediaType === "tv" ? "tv" : "movie";
@@ -109,17 +126,17 @@ export async function discover(filters: CatalogFilters) {
   }
 
   const data = await tmdb<TmdbList>(`/discover/${mediaType}`, params);
-  return normalizeList(data?.results, mediaType);
+  return normalizeList(data?.results, mediaType, withFallback);
 }
 
-export async function search(query: string, mediaType?: string) {
+export async function search(query: string, mediaType?: string, withFallback = false) {
   const type = mediaType === "movie" || mediaType === "tv" ? mediaType : "multi";
   const data = await tmdb<TmdbList>(`/search/${type}`, {
     query,
     include_adult: "false",
   });
 
-  return normalizeList(data?.results, type === "multi" ? undefined : type);
+  return normalizeList(data?.results, type === "multi" ? undefined : type, withFallback);
 }
 
 export async function getDetails(mediaType: MediaType, id: number): Promise<MediaDetails> {
@@ -146,6 +163,21 @@ export async function getRecommendations(mediaType: MediaType, id: number) {
   const data = await tmdb<TmdbList>(`/${mediaType}/${id}/recommendations`, {});
   const recommendations = normalizeList(data?.results, mediaType);
   return recommendations.length ? recommendations : fallbackCatalog();
+}
+
+export async function getTrailerUrl(mediaType: MediaType, id: number) {
+  const data = await tmdb<TmdbVideos>(`/${mediaType}/${id}/videos`, {});
+  const fallbackData = data?.results?.length
+    ? null
+    : await tmdb<TmdbVideos>(`/${mediaType}/${id}/videos`, { language: "en-US" });
+  const videos = data?.results?.length ? data.results : fallbackData?.results ?? [];
+  const trailer =
+    videos.find((video) => isYoutubeTrailer(video) && video.official) ??
+    videos.find(isYoutubeTrailer) ??
+    videos.find((video) => video.site === "YouTube");
+
+  if (!trailer) return null;
+  return `https://www.youtube-nocookie.com/embed/${trailer.key}?autoplay=1&mute=1&controls=0&loop=1&playlist=${trailer.key}&playsinline=1&rel=0&modestbranding=1`;
 }
 
 export function posterUrl(path: string | null, size = "w342") {
@@ -178,12 +210,16 @@ async function tmdb<T>(path: string, params: Record<string, string>): Promise<T 
   }
 }
 
-function normalizeList(results: TmdbResult[] | undefined, forcedType?: MediaType) {
+function normalizeList(
+  results: TmdbResult[] | undefined,
+  forcedType?: MediaType,
+  withFallback = true,
+) {
   const normalized = (results ?? [])
     .map((result) => normalizeItem(result, forcedType))
     .filter((item): item is CatalogItem => Boolean(item));
 
-  return normalized.length ? normalized : fallbackCatalog();
+  return normalized.length || !withFallback ? normalized : fallbackCatalog();
 }
 
 function normalizeItem(result: TmdbResult, forcedType?: MediaType): CatalogItem | null {
@@ -205,4 +241,8 @@ function normalizeItem(result: TmdbResult, forcedType?: MediaType): CatalogItem 
     genreIds: result.genre_ids ?? result.genres?.map((genre) => genre.id) ?? [],
     originalLanguage: result.original_language ?? "na",
   };
+}
+
+function isYoutubeTrailer(video: TmdbVideo) {
+  return video.site === "YouTube" && ["Trailer", "Teaser"].includes(video.type);
 }
