@@ -180,12 +180,15 @@ export function CineVerseHome({ catalog, continueWatching }: Props) {
             <h2 className="mb-4 text-xl font-bold tracking-normal">{section.title}</h2>
             <div className="scrollbar-none grid auto-cols-[150px] grid-flow-col gap-3 overflow-x-auto pb-2 sm:auto-cols-[190px]">
               {section.items.map((item) => (
-                <article key={`${section.id}-${item.mediaType}-${item.id}`} className="group">
+                <article
+                  key={`${section.id}-${item.mediaType}-${item.id}`}
+                  className="group relative"
+                >
                   <Link
                     href={`/watch/${item.mediaType}/${item.id}`}
                     className="block overflow-hidden rounded bg-zinc-900 ring-1 ring-white/10 transition duration-200 hover:scale-[1.03] hover:ring-white/30"
                   >
-                    <div className="aspect-[2/3] bg-zinc-900">
+                    <div className="relative aspect-[2/3] bg-zinc-900">
                       {item.posterUrl ? (
                         <img
                           src={item.posterUrl}
@@ -198,6 +201,11 @@ export function CineVerseHome({ catalog, continueWatching }: Props) {
                           <span className="text-sm font-black leading-tight">{item.title}</span>
                         </div>
                       )}
+                      <div className="absolute left-2 top-2 inline-flex h-8 items-center gap-1 rounded bg-black/85 px-2 text-xs font-black text-white shadow-lg ring-1 ring-white/20 backdrop-blur">
+                        <Star className="h-3.5 w-3.5 fill-[#f5c542] text-[#f5c542]" />
+                        {item.voteAverage > 0 ? item.voteAverage.toFixed(1) : "N/A"}
+                      </div>
+                      <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-black/80 to-transparent" />
                     </div>
                     <div className="min-h-20 p-3">
                       <h3 className="line-clamp-2 text-sm font-bold leading-5">{item.title}</h3>
@@ -209,7 +217,7 @@ export function CineVerseHome({ catalog, continueWatching }: Props) {
                   <button
                     type="button"
                     onClick={() => toggleLike(item)}
-                    className="mt-2 inline-flex h-8 w-8 items-center justify-center rounded bg-zinc-900 text-zinc-200 ring-1 ring-white/10 transition hover:text-white"
+                    className="absolute right-2 top-2 z-10 inline-flex h-8 w-8 items-center justify-center rounded bg-black/85 text-zinc-100 shadow-lg ring-1 ring-white/20 backdrop-blur transition hover:bg-[#e50914] hover:text-white"
                     aria-label="J'aime"
                   >
                     <Heart
