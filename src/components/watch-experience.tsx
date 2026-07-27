@@ -159,7 +159,7 @@ export function WatchExperience({
   const percent = progress.duration ? Math.min(100, (progress.currentTime / progress.duration) * 100) : 0;
 
   return (
-    <main className="min-h-screen bg-[#050505] pt-16 text-white">
+    <main className="min-h-screen overflow-x-hidden bg-[#050505] pt-16 text-white">
       <SiteHeader fixed />
       <div className="relative">
         <div className="absolute inset-x-0 top-0 z-20 bg-gradient-to-b from-black to-transparent">
@@ -218,7 +218,7 @@ export function WatchExperience({
           </div>
 
           <div className="border-t border-white/10 bg-[#0b0b0b]">
-            <div className="mx-auto grid max-w-7xl gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[180px_1fr_380px] lg:px-8">
+            <div className="mx-auto grid min-w-0 max-w-7xl gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[180px_minmax(0,1fr)_340px] lg:px-8">
               <aside className="hidden lg:block">
                 {detail.posterUrl ? (
                   <img
@@ -231,7 +231,7 @@ export function WatchExperience({
                 )}
               </aside>
 
-              <section>
+              <section className="min-w-0 overflow-hidden">
                 <div className="mb-3 flex flex-wrap items-center gap-3 text-sm text-zinc-300">
                   <span>{detail.mediaType === "movie" ? "Film" : "Serie"}</span>
                   <span className="inline-flex items-center gap-1">
@@ -256,16 +256,16 @@ export function WatchExperience({
                   ))}
                 </div>
                 {detail.cast.length ? (
-                  <div className="mt-6">
+                  <div className="mt-6 min-w-0 max-w-full overflow-hidden">
                     <h2 className="mb-3 text-sm font-black uppercase tracking-[0.12em] text-zinc-400">
                       Casting
                     </h2>
-                    <div className="scrollbar-none grid auto-cols-[92px] grid-flow-col gap-3 overflow-x-auto">
+                    <div className="scrollbar-none flex w-full max-w-full gap-3 overflow-x-auto pb-2">
                       {detail.cast.map((person) => (
                         <Link
                           key={person.id}
                           href={`/browse?type=${detail.mediaType}&person=${person.id}&personName=${encodeURIComponent(person.name)}`}
-                          className="group"
+                          className="group w-[92px] shrink-0"
                         >
                           <div className="aspect-[3/4] overflow-hidden rounded bg-zinc-900 ring-1 ring-white/10">
                             {person.profileUrl ? (
@@ -289,7 +289,7 @@ export function WatchExperience({
                 ) : null}
               </section>
 
-              <aside className="grid gap-3 rounded bg-zinc-950 p-4 ring-1 ring-white/10">
+              <aside className="grid min-w-0 content-start gap-3 rounded bg-zinc-950 p-4 ring-1 ring-white/10">
                 <div className="grid grid-cols-2 gap-2">
                   {providers.map((item) => (
                     <button
