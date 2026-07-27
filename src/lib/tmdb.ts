@@ -181,7 +181,7 @@ export async function searchWithMeta(
 export async function getDetails(mediaType: MediaType, id: number): Promise<MediaDetails> {
   const data = await tmdb<TmdbDetails>(`/${mediaType}/${id}`, {
     append_to_response: "credits",
-  });
+  }, { noStore: true });
   if (!data) return fallbackDetails(mediaType, id);
 
   const item = normalizeItem(data, mediaType);
@@ -189,6 +189,7 @@ export async function getDetails(mediaType: MediaType, id: number): Promise<Medi
 
   return {
     ...item,
+    metadataSource: "tmdb",
     runtime: data.runtime ?? data.episode_run_time?.[0] ?? null,
     genres: data.genres ?? [],
     cast:
@@ -249,33 +250,53 @@ export function backdropUrl(path: string | null, size = "w1280") {
   return path ? `${IMAGE_BASE_URL}/${size}${path}` : null;
 }
 
-async function tmdb<T>(path: string, params: Record<string, string>): Promise<T | null> {
+async function tmdb<T>(
+  path: string,
+  params: Record<string, string>,
+  options: { noStore?: boolean } = {},
+): Promise<T | null> {
   const accessToken = process.env.TMDB_ACCESS_TOKEN;
   const apiKey = process.env.TMDB_API_KEY;
   if (!accessToken && !apiKey) return null;
 
-  const url = new URL(`${TMDB_BASE_URL}${path}`);
-  url.searchParams.set("language", "fr-FR");
-  Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
-  if (!accessToken && apiKey) url.searchParams.set("api_key", apiKey);
+  const credentials: Array<{ accessToken: string } | { apiKey: string }> = [];
+  if (accessToken) credentials.push({ accessToken });
+  if (apiKey) credentials.push({ apiKey });
 
-  try {
-    const response = await fetchWithRetry(url, {
-      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined,
-      next: { revalidate: 60 * 30 },
-    });
-    if (!response.ok) return null;
-    return (await response.json()) as T;
-  } catch {
-    return null;
+  for (const credential of credentials) {
+    const url = new URL(`${TMDB_BASE_URL}${path}`);
+    url.searchParams.set("language", "fr-FR");
+    Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
+    if ("apiKey" in credential) url.searchParams.set("api_key", credential.apiKey);
+
+    try {
+      const response = await fetchWithRetry(url, {
+        headers:
+          "accessToken" in credential
+            ? { Authorization: `Bearer ${credential.accessToken}` }
+            : undefined,
+        ...(options.noStore
+          ? { cache: "no-store" as const }
+          : { next: { revalidate: 60 * 30 } }),
+      });
+      if (response.ok) return (await response.json()) as T;
+      if (![401, 403].includes(response.status)) return null;
+    } catch (error) {
+      console.error(`TMDB request failed for ${path}`, error);
+    }
   }
+
+  return null;
 }
 
-async function fetchWithRetry(url: URL, init: RequestInit, attempts = 2) {
+async function fetchWithRetry(url: URL, init: RequestInit, attempts = 3) {
   let lastError: unknown;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
-      return await fetch(url, init);
+      return await fetch(url, {
+        ...init,
+        signal: AbortSignal.timeout(8000),
+      });
     } catch (error) {
       lastError = error;
     }

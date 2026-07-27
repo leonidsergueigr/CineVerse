@@ -59,6 +59,12 @@ Tu peux aussi declarer les langues exposees par un provider:
 
 Si `languages` est absent, CineVerse propose `VF`, `VOSTFR`, puis `VO`, avec `VF` preselectionne.
 
+Un provider peut aussi exposer un endpoint de disponibilite avec
+`"availabilityApi": "https://example.test/api/{tmdbId}"`. Si sa reponse contient
+`available`, `detectedType`, `title`, `year`, `poster` et `languages`, CineVerse
+masque les sources indisponibles, adapte les langues du lecteur et utilise ces
+informations si TMDB est temporairement inaccessible.
+
 Exemple:
 
 ```json

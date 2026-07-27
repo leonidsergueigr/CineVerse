@@ -1,5 +1,9 @@
 import { notFound } from "next/navigation";
 import { WatchExperience } from "@/components/watch-experience";
+import {
+  applyProviderMetadata,
+  resolveProvidersForMedia,
+} from "@/lib/provider-availability";
 import { getEmbedProviders } from "@/lib/providers";
 import { getProgress } from "@/lib/store";
 import { getDetails } from "@/lib/tmdb";
@@ -23,13 +27,18 @@ export default async function WatchPage({ params, searchParams }: PageProps) {
 
   const season = mediaType === "tv" ? Number(query.season ?? 1) : null;
   const episode = mediaType === "tv" ? Number(query.episode ?? 1) : null;
-  const detail = await getDetails(mediaType, id);
+  const configuredProviders = getEmbedProviders();
+  const [tmdbDetail, providerResolution] = await Promise.all([
+    getDetails(mediaType, id),
+    resolveProvidersForMedia(configuredProviders, id, mediaType),
+  ]);
+  const detail = applyProviderMetadata(tmdbDetail, providerResolution.mediaInfo);
   const progress = getProgress(id, mediaType, season, episode);
 
   return (
     <WatchExperience
       detail={detail}
-      providers={getEmbedProviders()}
+      providers={providerResolution.providers}
       initialProgress={progress}
       initialSeason={season}
       initialEpisode={episode}

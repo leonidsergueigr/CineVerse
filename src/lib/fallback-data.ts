@@ -116,6 +116,7 @@ export function fallbackDetails(mediaType: string, id: number): MediaDetails {
 
   return {
     ...item,
+    metadataSource: "fallback",
     runtime: item.mediaType === "movie" ? 136 : null,
     genres: item.genreIds.map((genreId) => ({ id: genreId, name: String(genreId) })),
     cast: [],

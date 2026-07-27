@@ -16,6 +16,7 @@ export type CatalogItem = {
 };
 
 export type MediaDetails = CatalogItem & {
+  metadataSource: "tmdb" | "provider" | "fallback";
   runtime: number | null;
   seasons?: Array<{
     id: number;
@@ -81,6 +82,7 @@ export type EmbedProvider = {
   id: string;
   name: string;
   template: string;
+  availabilityApi?: string;
   supportsTracking: boolean;
   supportsLanguage: boolean;
   priority: number;
