@@ -1,36 +1,72 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# CineVerse
 
-## Getting Started
+Home cinema local auto-heberge, inspire des interfaces de streaming premium, avec catalogue TMDB, recherche/filtrage, lecteur iframe configurable, suivi de progression et likes persistants.
 
-First, run the development server:
+## Stack
+
+- Next.js App Router pour l'interface et l'API locale.
+- Tailwind CSS pour l'UI sombre type cinema.
+- SQLite via `better-sqlite3` pour `watch_history` et `user_likes`.
+- Docker Compose pour un lancement local reproductible.
+- TMDB pour les metadonnees, tendances, recherche, decouverte et recommandations.
+
+## Lancer en local
 
 ```bash
+cp .env.example .env
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Ouvre ensuite `http://localhost:3000`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Sans cle TMDB, CineVerse demarre avec un petit catalogue de secours. Pour les vraies donnees, renseigne `TMDB_ACCESS_TOKEN` ou `TMDB_API_KEY` dans `.env`.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Lancer avec Docker
 
-## Learn More
+```bash
+cp .env.example .env
+docker compose up --build
+```
 
-To learn more about Next.js, take a look at the following resources:
+La base SQLite est montee dans `./data/cineverse.sqlite`.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Sources video
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Par defaut, CineVerse utilise un lecteur de demonstration local qui emet des evenements `postMessage` compatibles avec le suivi de progression. Pour brancher tes propres lecteurs ou services autorises, configure `CINEVERSE_EMBED_PROVIDERS_JSON` dans `.env`.
 
-## Deploy on Vercel
+Placeholders disponibles dans les templates:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- `{tmdbId}`
+- `{mediaType}`
+- `{title}`
+- `{language}`
+- `{season}`
+- `{episode}`
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Exemple:
+
+```json
+[
+  {
+    "id": "my-provider",
+    "name": "My Provider",
+    "template": "https://example.test/embed/{mediaType}/{tmdbId}?lang={language}&s={season}&e={episode}",
+    "supportsTracking": true,
+    "supportsLanguage": true,
+    "priority": 1
+  }
+]
+```
+
+## Routes utiles
+
+- `GET /api/progress` liste les reprises de lecture.
+- `POST /api/progress` sauvegarde la progression.
+- `GET /api/likes` liste les contenus aimes.
+- `POST /api/likes` ajoute ou retire un like.
+- `GET /api/recommendations` renvoie des recommandations basees sur les likes si possible.
+
+## Git
+
+Le depot est initialise sur `main` avec des commits separes par etape: scaffold, dependances, application, puis packaging.
