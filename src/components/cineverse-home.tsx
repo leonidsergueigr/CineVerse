@@ -1,17 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import {
-  ChevronRight,
-  Filter,
-  Heart,
-  Play,
-  Search,
-  SlidersHorizontal,
-  Star,
-} from "lucide-react";
+import { ChevronRight, Heart, Play, Star } from "lucide-react";
 import { useMemo, useState, useTransition } from "react";
-import { GENRES, LANGUAGES, SERIES_GENRES } from "@/lib/genres";
 import type { BrowseCatalog, CatalogItem, HomeCatalog, WatchProgress } from "@/lib/types";
 import { SiteHeader } from "@/components/site-header";
 
@@ -141,7 +132,7 @@ export function CineVerseHome({ catalog, continueWatching }: Props) {
 }
 
 export function BrowseExperience({ catalog }: { catalog: BrowseCatalog }) {
-  const [isPending, startTransition] = useTransition();
+  const [, startTransition] = useTransition();
   const [liked, setLiked] = useState<Record<string, boolean>>({});
 
   function toggleLike(item: CatalogItem) {
@@ -167,67 +158,6 @@ export function BrowseExperience({ catalog }: { catalog: BrowseCatalog }) {
   return (
     <main className="min-h-screen bg-[#050505] pt-16 text-white">
       <SiteHeader query={catalog.filters.query} />
-      <section className="border-b border-white/10 bg-[#0b0b0b]">
-        <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-          <form action="/browse" className="grid gap-3 md:grid-cols-[1.5fr_repeat(5,1fr)_auto]">
-            <label className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
-              <input
-                name="q"
-                defaultValue={catalog.filters.query}
-                placeholder="Rechercher"
-                className="h-11 w-full rounded border border-white/10 bg-white/[0.08] pl-10 pr-3 text-sm text-white outline-none transition focus:border-[#e50914]"
-              />
-            </label>
-            <select name="type" defaultValue={catalog.filters.mediaType ?? ""} className="filter-field">
-              <option value="">Tout</option>
-              <option value="movie">Films</option>
-              <option value="tv">Series</option>
-            </select>
-            <select name="genre" defaultValue={catalog.filters.genre ?? ""} className="filter-field">
-              <option value="">Genre</option>
-              {(catalog.filters.mediaType === "tv" ? seriesGenres : movieGenres).map((genre) => (
-                <option key={genre.id} value={genre.id}>
-                  {genre.name}
-                </option>
-              ))}
-            </select>
-            <input
-              name="yearFrom"
-              defaultValue={catalog.filters.yearFrom}
-              placeholder="Depuis"
-              inputMode="numeric"
-              className="filter-field"
-            />
-            <input
-              name="yearTo"
-              defaultValue={catalog.filters.yearTo}
-              placeholder="Jusqu'a"
-              inputMode="numeric"
-              className="filter-field"
-            />
-            <select
-              name="originalLanguage"
-              defaultValue={catalog.filters.originalLanguage ?? ""}
-              className="filter-field"
-            >
-              <option value="">Langue originale</option>
-              {LANGUAGES.map((language) => (
-                <option key={language.id} value={language.id}>
-                  {language.name}
-                </option>
-              ))}
-            </select>
-            <button
-              type="submit"
-              className="inline-flex h-11 items-center justify-center gap-2 rounded bg-[#e50914] px-4 text-sm font-bold text-white transition hover:bg-[#f6121d]"
-            >
-              {isPending ? <SlidersHorizontal className="h-4 w-4 animate-pulse" /> : <Filter className="h-4 w-4" />}
-              Filtrer
-            </button>
-          </form>
-        </div>
-      </section>
 
       <div id="catalog" className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
         <FilteredGrid
@@ -464,7 +394,3 @@ function progressToCatalogItem(progress: WatchProgress): CatalogItem {
 function yearOf(date: string | null) {
   return date ? date.slice(0, 4) : "CineVerse";
 }
-
-const movieGenres = GENRES;
-
-const seriesGenres = SERIES_GENRES;
