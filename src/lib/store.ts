@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
-import type { MediaType, WatchProgress } from "@/lib/types";
+import type { LikeRecord, MediaType, WatchProgress } from "@/lib/types";
 
 type ProgressInput = {
   tmdbId: number;
@@ -178,7 +178,7 @@ export function setLike(input: LikeInput) {
     .run(input);
 }
 
-export function getLikes(limit = 24) {
+export function getLikes(limit = 24): LikeRecord[] {
   return getDb()
     .prepare(
       `
@@ -190,7 +190,16 @@ export function getLikes(limit = 24) {
       limit ?
     `,
     )
-    .all(limit);
+    .all(limit) as LikeRecord[];
+}
+
+export function hasLike(tmdbId: number, mediaType: MediaType) {
+  const row = getDb()
+    .prepare(
+      "select 1 from user_likes where user_id = 'local' and tmdb_id = ? and media_type = ? limit 1",
+    )
+    .get(tmdbId, mediaType);
+  return Boolean(row);
 }
 
 type DbProgress = {

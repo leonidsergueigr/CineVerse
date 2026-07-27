@@ -80,6 +80,31 @@ export type WatchProgress = {
   updatedAt: string;
 };
 
+export type LikeRecord = {
+  tmdbId: number;
+  mediaType: MediaType;
+  title: string;
+  posterPath: string | null;
+  backdropPath: string | null;
+  likedAt: string;
+};
+
+export type PersonalizedRecommendation = CatalogItem & {
+  reason: string;
+  score: number;
+};
+
+export type RecommendationResult = {
+  items: PersonalizedRecommendation[];
+  strategy: "personalized" | "empty";
+  profile: {
+    likeCount: number;
+    movieCount: number;
+    seriesCount: number;
+    topGenres: Array<{ name: string; weight: number }>;
+  };
+};
+
 export type EmbedProvider = {
   id: string;
   name: string;

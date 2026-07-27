@@ -240,6 +240,36 @@ export async function getRecommendations(mediaType: MediaType, id: number) {
   return recommendations.length ? recommendations : fallbackCatalog();
 }
 
+export async function getTasteCandidates(mediaType: MediaType, id: number) {
+  const [recommendations, similar] = await Promise.all([
+    tmdb<TmdbList>(`/${mediaType}/${id}/recommendations`, {}),
+    tmdb<TmdbList>(`/${mediaType}/${id}/similar`, {}),
+  ]);
+
+  return {
+    recommendations: normalizeList(recommendations?.results, mediaType, false),
+    similar: normalizeList(similar?.results, mediaType, false),
+  };
+}
+
+export async function discoverTasteCandidates(
+  mediaType: MediaType,
+  genreIds: number[],
+) {
+  if (!genreIds.length) return [];
+
+  const params: Record<string, string> = {
+    sort_by: "popularity.desc",
+    include_adult: "false",
+    with_genres: genreIds.join("|"),
+    "vote_count.gte": mediaType === "movie" ? "80" : "30",
+    "vote_average.gte": "6",
+    page: "1",
+  };
+  const data = await tmdb<TmdbList>(`/discover/${mediaType}`, params);
+  return normalizeList(data?.results, mediaType, false);
+}
+
 export async function getTrailerUrl(mediaType: MediaType, id: number) {
   const data = await tmdb<TmdbVideos>(`/${mediaType}/${id}/videos`, {});
   const fallbackData = data?.results?.length
