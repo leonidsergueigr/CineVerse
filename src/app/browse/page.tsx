@@ -1,4 +1,5 @@
 import { BrowseExperience } from "@/components/cineverse-home";
+import { getLikes } from "@/lib/store";
 import { getBrowseCatalog } from "@/lib/tmdb";
 
 export const dynamic = "force-dynamic";
@@ -9,6 +10,7 @@ type PageProps = {
 
 export default async function BrowsePage({ searchParams }: PageProps) {
   const params = await searchParams;
+  const likes = getLikes();
   const catalog = await getBrowseCatalog({
     query: valueOf(params.q),
     mediaType: valueOf(params.type),
@@ -23,7 +25,12 @@ export default async function BrowsePage({ searchParams }: PageProps) {
     page: valueOf(params.page),
   });
 
-  return <BrowseExperience catalog={catalog} />;
+  return (
+    <BrowseExperience
+      catalog={catalog}
+      initialLikedKeys={likes.map((like) => `${like.mediaType}-${like.tmdbId}`)}
+    />
+  );
 }
 
 function valueOf(value: string | string[] | undefined) {

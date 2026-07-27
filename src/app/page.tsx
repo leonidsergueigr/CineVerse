@@ -1,5 +1,6 @@
 import { CineVerseHome } from "@/components/cineverse-home";
-import { getContinueWatching } from "@/lib/store";
+import { buildPersonalizedRecommendations } from "@/lib/recommendations";
+import { getContinueWatching, getLikes } from "@/lib/store";
 import { getCatalogItemsByIds, getHomeCatalog } from "@/lib/tmdb";
 import type { CatalogItem, WatchProgress } from "@/lib/types";
 
@@ -7,17 +8,26 @@ export const dynamic = "force-dynamic";
 
 export default async function Home() {
   const progress = getContinueWatching();
-  const [catalog, refreshedItems] = await Promise.all([
+  const likes = getLikes();
+  const [catalog, refreshedItems, recommendations] = await Promise.all([
     getHomeCatalog(),
     getCatalogItemsByIds(
       progress.map((item) => ({ id: item.tmdbId, mediaType: item.mediaType })),
     ),
+    buildPersonalizedRecommendations(likes),
   ]);
   const continueWatching = progress.map(
     (item, index) => refreshedItems[index] ?? progressToCatalogItem(item),
   );
 
-  return <CineVerseHome catalog={catalog} continueWatching={continueWatching} />;
+  return (
+    <CineVerseHome
+      catalog={catalog}
+      continueWatching={continueWatching}
+      initialLikedKeys={likes.map((like) => `${like.mediaType}-${like.tmdbId}`)}
+      initialRecommendations={recommendations}
+    />
+  );
 }
 
 function progressToCatalogItem(progress: WatchProgress): CatalogItem {

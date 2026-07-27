@@ -1,37 +1,76 @@
 "use client";
 
 import Link from "next/link";
-import { ChevronRight, Heart, Play, Star } from "lucide-react";
+import { ChevronRight, Heart, LoaderCircle, Play, Star } from "lucide-react";
 import { useMemo, useState, useTransition } from "react";
-import type { BrowseCatalog, CatalogItem, HomeCatalog } from "@/lib/types";
+import type {
+  BrowseCatalog,
+  CatalogItem,
+  CatalogSection,
+  HomeCatalog,
+  RecommendationResult,
+} from "@/lib/types";
 import { SiteHeader } from "@/components/site-header";
 
 type Props = {
   catalog: HomeCatalog;
   continueWatching: CatalogItem[];
+  initialLikedKeys: string[];
+  initialRecommendations: RecommendationResult;
 };
 
-export function CineVerseHome({ catalog, continueWatching }: Props) {
+type HomeSection = CatalogSection & {
+  personalized?: boolean;
+};
+
+export function CineVerseHome({
+  catalog,
+  continueWatching,
+  initialLikedKeys,
+  initialRecommendations,
+}: Props) {
   const [, startTransition] = useTransition();
-  const [liked, setLiked] = useState<Record<string, boolean>>({});
+  const [liked, setLiked] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(initialLikedKeys.map((key) => [key, true])),
+  );
+  const [recommendations, setRecommendations] = useState(initialRecommendations);
+  const [recommendationsLoading, setRecommendationsLoading] = useState(false);
   const hero = catalog.hero;
   const heroBackground = hero.backdropUrl ?? hero.posterUrl;
 
   const sections = useMemo(() => {
-    return [
+    const result: HomeSection[] = [
       ...(continueWatching.length
         ? [{ id: "resume", title: "Reprendre la lecture", items: continueWatching }]
         : []),
+      ...(recommendations.items.length
+        ? [
+            {
+              id: "for-you",
+              title: "Pour vous",
+              items: recommendations.items,
+              personalized: true,
+            },
+          ]
+        : []),
       ...catalog.sections,
     ];
-  }, [catalog.sections, continueWatching]);
+    return result;
+  }, [catalog.sections, continueWatching, recommendations.items]);
 
   function toggleLike(item: CatalogItem) {
     const key = `${item.mediaType}-${item.id}`;
     const next = !liked[key];
     setLiked((current) => ({ ...current, [key]: next }));
-    startTransition(() => {
-      fetch("/api/likes", {
+
+    void syncLike(item, next, key);
+  }
+
+  async function syncLike(item: CatalogItem, next: boolean, key: string) {
+    setRecommendationsLoading(true);
+    let likeSaved = false;
+    try {
+      const response = await fetch("/api/likes", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -43,7 +82,20 @@ export function CineVerseHome({ catalog, continueWatching }: Props) {
           liked: next,
         }),
       });
-    });
+      if (!response.ok) throw new Error("Like update failed");
+      likeSaved = true;
+
+      const recommendationResponse = await fetch("/api/recommendations", {
+        cache: "no-store",
+      });
+      if (!recommendationResponse.ok) throw new Error("Recommendation refresh failed");
+      const result = (await recommendationResponse.json()) as RecommendationResult;
+      startTransition(() => setRecommendations(result));
+    } catch {
+      if (!likeSaved) setLiked((current) => ({ ...current, [key]: !next }));
+    } finally {
+      setRecommendationsLoading(false);
+    }
   }
 
   return (
@@ -112,7 +164,24 @@ export function CineVerseHome({ catalog, continueWatching }: Props) {
       <div id="catalog" className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
         {sections.map((section) => (
           <section key={section.id} id={section.id} className="mb-10">
-            <h2 className="mb-4 text-xl font-bold tracking-normal">{section.title}</h2>
+            <div className="mb-4 flex min-h-8 flex-wrap items-end justify-between gap-3">
+              <div>
+                <h2 className="text-xl font-bold tracking-normal">{section.title}</h2>
+                {section.personalized ? (
+                  <p className="mt-1 text-xs text-zinc-500">
+                    {recommendations.profile.likeCount} titre
+                    {recommendations.profile.likeCount > 1 ? "s" : ""} aime
+                    {recommendations.profile.likeCount > 1 ? "s" : ""}
+                    {recommendations.profile.topGenres.length
+                      ? ` · ${recommendations.profile.topGenres.map((genre) => genre.name).join(" · ")}`
+                      : ""}
+                  </p>
+                ) : null}
+              </div>
+              {section.personalized && recommendationsLoading ? (
+                <LoaderCircle className="h-4 w-4 animate-spin text-zinc-500" />
+              ) : null}
+            </div>
             <div className="scrollbar-none grid auto-cols-[150px] grid-flow-col gap-3 overflow-x-auto pb-2 sm:auto-cols-[190px]">
               {section.items.map((item) => (
                 <MediaCard
@@ -120,6 +189,11 @@ export function CineVerseHome({ catalog, continueWatching }: Props) {
                   item={item}
                   liked={Boolean(liked[`${item.mediaType}-${item.id}`])}
                   onLike={toggleLike}
+                  reason={
+                    section.personalized && "reason" in item
+                      ? String(item.reason)
+                      : undefined
+                  }
                 />
               ))}
             </div>
@@ -130,9 +204,17 @@ export function CineVerseHome({ catalog, continueWatching }: Props) {
   );
 }
 
-export function BrowseExperience({ catalog }: { catalog: BrowseCatalog }) {
+export function BrowseExperience({
+  catalog,
+  initialLikedKeys = [],
+}: {
+  catalog: BrowseCatalog;
+  initialLikedKeys?: string[];
+}) {
   const [, startTransition] = useTransition();
-  const [liked, setLiked] = useState<Record<string, boolean>>({});
+  const [liked, setLiked] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(initialLikedKeys.map((key) => [key, true])),
+  );
 
   function toggleLike(item: CatalogItem) {
     const key = `${item.mediaType}-${item.id}`;
@@ -288,11 +370,13 @@ function MediaCard({
   liked,
   onLike,
   compact = false,
+  reason,
 }: {
   item: CatalogItem;
   liked: boolean;
   onLike: (item: CatalogItem) => void;
   compact?: boolean;
+  reason?: string;
 }) {
   return (
     <article className="group relative">
@@ -321,11 +405,14 @@ function MediaCard({
           </div>
           <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-black/80 to-transparent" />
         </div>
-        <div className={compact ? "min-h-16 p-2" : "min-h-20 p-3"}>
+        <div className={compact ? "min-h-16 p-2" : reason ? "min-h-28 p-3" : "min-h-20 p-3"}>
           <h3 className="line-clamp-2 text-sm font-bold leading-5">{item.title}</h3>
           <p className="mt-1 text-xs text-zinc-400">
             {yearOf(item.releaseDate)} · {item.mediaType === "movie" ? "Film" : "Serie"}
           </p>
+          {reason ? (
+            <p className="mt-2 line-clamp-2 text-xs leading-4 text-zinc-400">{reason}</p>
+          ) : null}
         </div>
       </Link>
       <button

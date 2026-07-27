@@ -234,12 +234,6 @@ export async function getDetails(mediaType: MediaType, id: number): Promise<Medi
   };
 }
 
-export async function getRecommendations(mediaType: MediaType, id: number) {
-  const data = await tmdb<TmdbList>(`/${mediaType}/${id}/recommendations`, {});
-  const recommendations = normalizeList(data?.results, mediaType);
-  return recommendations.length ? recommendations : fallbackCatalog();
-}
-
 export async function getTasteCandidates(mediaType: MediaType, id: number) {
   const [recommendations, similar] = await Promise.all([
     tmdb<TmdbList>(`/${mediaType}/${id}/recommendations`, {}),

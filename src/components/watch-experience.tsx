@@ -11,6 +11,7 @@ type Props = {
   detail: MediaDetails;
   providers: EmbedProvider[];
   initialProgress: WatchProgress | null;
+  initialLiked: boolean;
   initialSeason: number | null;
   initialEpisode: number | null;
 };
@@ -19,6 +20,7 @@ export function WatchExperience({
   detail,
   providers,
   initialProgress,
+  initialLiked,
   initialSeason,
   initialEpisode,
 }: Props) {
@@ -27,6 +29,7 @@ export function WatchExperience({
   const [season, setSeason] = useState(initialSeason ?? 1);
   const [episode, setEpisode] = useState(initialEpisode ?? 1);
   const [started, setStarted] = useState(false);
+  const [liked, setLiked] = useState(initialLiked);
   const [autoNext, setAutoNext] = useState(true);
   const [progress, setProgress] = useState({
     currentTime: initialProgress?.progressSeconds ?? 0,
@@ -119,8 +122,10 @@ export function WatchExperience({
   }, [detail, episode, maybeAutoAdvance, season]);
 
   function like() {
+    const next = !liked;
+    setLiked(next);
     startTransition(() => {
-      fetch("/api/likes", {
+      void fetch("/api/likes", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -129,8 +134,10 @@ export function WatchExperience({
           title: detail.title,
           posterPath: detail.posterPath,
           backdropPath: detail.backdropPath,
-          liked: true,
+          liked: next,
         }),
+      }).then((response) => {
+        if (!response.ok) setLiked(!next);
       });
     });
   }
@@ -373,10 +380,15 @@ export function WatchExperience({
                 <button
                   type="button"
                   onClick={like}
-                  className="inline-flex h-11 items-center justify-center gap-2 rounded bg-white px-4 text-sm font-bold text-black transition hover:bg-zinc-200"
+                  aria-pressed={liked}
+                  className={`inline-flex h-11 items-center justify-center gap-2 rounded px-4 text-sm font-bold transition ${
+                    liked
+                      ? "bg-[#e50914] text-white hover:bg-[#f6121d]"
+                      : "bg-white text-black hover:bg-zinc-200"
+                  }`}
                 >
-                  <Heart className="h-4 w-4" />
-                  {"J'aime"}
+                  <Heart className={`h-4 w-4 ${liked ? "fill-white" : ""}`} />
+                  {liked ? "Aime" : "J'aime"}
                 </button>
                 <div className="rounded bg-white/5 p-3 text-xs text-zinc-300">
                   {formatTime(progress.currentTime)} / {formatTime(progress.duration)}
