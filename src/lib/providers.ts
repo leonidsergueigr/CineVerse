@@ -25,18 +25,25 @@ export function buildEmbedUrl(
     episodeNumber?: number | null;
   },
 ) {
+  const providerMediaType = detail.mediaType === "tv" ? "serie" : "movie";
+  const languagePath = options.language === "vo" ? "" : `/${options.language}`;
+  const season = String(options.seasonNumber ?? 1);
+  const episode = String(options.episodeNumber ?? 1);
+  const seasonEpisodePath = detail.mediaType === "tv" ? `/${season}/${episode}` : "";
   const values: Record<string, string> = {
-    tmdbId: String(detail.id),
-    mediaType: detail.mediaType,
-    title: detail.title,
-    language: options.language,
-    season: String(options.seasonNumber ?? 1),
-    episode: String(options.episodeNumber ?? 1),
+    tmdbId: encodeURIComponent(String(detail.id)),
+    mediaType: providerMediaType,
+    providerMediaType,
+    tmdbMediaType: detail.mediaType,
+    title: encodeURIComponent(detail.title),
+    language: encodeURIComponent(options.language),
+    languagePath,
+    season: encodeURIComponent(season),
+    episode: encodeURIComponent(episode),
+    seasonEpisodePath,
   };
 
-  return provider.template.replace(/\{(\w+)\}/g, (_, key: string) =>
-    encodeURIComponent(values[key] ?? ""),
-  );
+  return provider.template.replace(/\{(\w+)\}/g, (_, key: string) => values[key] ?? "");
 }
 
 function demoProviders(): EmbedProvider[] {
@@ -45,7 +52,7 @@ function demoProviders(): EmbedProvider[] {
       id: "cineverse-demo",
       name: "CineVerse Demo",
       template:
-        "/api/demo-player?tmdbId={tmdbId}&mediaType={mediaType}&title={title}&language={language}&season={season}&episode={episode}",
+        "/api/demo-player?tmdbId={tmdbId}&mediaType={tmdbMediaType}&title={title}&language={language}&season={season}&episode={episode}",
       supportsTracking: true,
       supportsLanguage: true,
       priority: 1,

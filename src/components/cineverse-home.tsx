@@ -2,15 +2,25 @@
 
 import Link from "next/link";
 import {
+  CalendarDays,
   ChevronRight,
+  Clapperboard,
   Filter,
+  Flame,
+  Globe2,
+  Grid2X2,
   Heart,
+  Library,
   Play,
   Search,
   SlidersHorizontal,
+  Sparkles,
   Star,
+  Tv,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useMemo, useState, useTransition } from "react";
+import type { ReactNode } from "react";
 import { GENRES, LANGUAGES } from "@/lib/genres";
 import type { CatalogItem, HomeCatalog, WatchProgress } from "@/lib/types";
 
@@ -130,68 +140,80 @@ export function CineVerseHome({ catalog, continueWatching }: Props) {
       </section>
 
       <section id="filtres" className="border-y border-white/10 bg-[#0b0b0b]">
-        <form className="mx-auto grid max-w-7xl gap-3 px-4 py-5 sm:px-6 md:grid-cols-[1.5fr_repeat(5,1fr)_auto] lg:px-8">
-          <label className="relative">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+        <div className="mx-auto max-w-7xl px-4 py-5 sm:px-6 lg:px-8">
+          <form className="grid gap-3 md:grid-cols-[1.5fr_repeat(5,1fr)_auto]">
+            <label className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+              <input
+                name="q"
+                defaultValue={catalog.filters.query}
+                placeholder="Rechercher"
+                className="h-11 w-full rounded border border-white/10 bg-white/[0.08] pl-10 pr-3 text-sm text-white outline-none transition focus:border-[#e50914]"
+              />
+            </label>
+            <select name="type" defaultValue={catalog.filters.mediaType ?? ""} className="filter-field">
+              <option value="">Tout</option>
+              <option value="movie">Films</option>
+              <option value="tv">Series</option>
+            </select>
+            <select name="genre" defaultValue={catalog.filters.genre ?? ""} className="filter-field">
+              <option value="">Genre</option>
+              {allGenres.map((genre) => (
+                <option key={genre.id} value={genre.id}>
+                  {genre.name}
+                </option>
+              ))}
+            </select>
             <input
-              name="q"
-              defaultValue={catalog.filters.query}
-              placeholder="Rechercher"
-              className="h-11 w-full rounded border border-white/10 bg-white/[0.08] pl-10 pr-3 text-sm text-white outline-none transition focus:border-[#e50914]"
+              name="yearFrom"
+              defaultValue={catalog.filters.yearFrom}
+              placeholder="Depuis"
+              inputMode="numeric"
+              className="filter-field"
             />
-          </label>
-          <select name="type" defaultValue={catalog.filters.mediaType ?? ""} className="filter-field">
-            <option value="">Tout</option>
-            <option value="movie">Films</option>
-            <option value="tv">Series</option>
-          </select>
-          <select name="genre" defaultValue={catalog.filters.genre ?? ""} className="filter-field">
-            <option value="">Genre</option>
-            {GENRES.map((genre) => (
-              <option key={genre.id} value={genre.id}>
-                {genre.name}
-              </option>
-            ))}
-          </select>
-          <input
-            name="yearFrom"
-            defaultValue={catalog.filters.yearFrom}
-            placeholder="Depuis"
-            inputMode="numeric"
-            className="filter-field"
-          />
-          <input
-            name="yearTo"
-            defaultValue={catalog.filters.yearTo}
-            placeholder="Jusqu'a"
-            inputMode="numeric"
-            className="filter-field"
-          />
-          <select
-            name="language"
-            defaultValue={catalog.filters.language ?? ""}
-            className="filter-field"
-          >
-            <option value="">Langue</option>
-            {LANGUAGES.map((language) => (
-              <option key={language.id} value={language.id}>
-                {language.name}
-              </option>
-            ))}
-          </select>
-          <button
-            type="submit"
-            className="inline-flex h-11 items-center justify-center gap-2 rounded bg-[#e50914] px-4 text-sm font-bold text-white transition hover:bg-[#f6121d]"
-          >
-            {isPending ? <SlidersHorizontal className="h-4 w-4 animate-pulse" /> : <Filter className="h-4 w-4" />}
-            Filtrer
-          </button>
-        </form>
+            <input
+              name="yearTo"
+              defaultValue={catalog.filters.yearTo}
+              placeholder="Jusqu'a"
+              inputMode="numeric"
+              className="filter-field"
+            />
+            <select
+              name="language"
+              defaultValue={catalog.filters.language ?? ""}
+              className="filter-field"
+            >
+              <option value="">Langue</option>
+              {LANGUAGES.map((language) => (
+                <option key={language.id} value={language.id}>
+                  {language.name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="submit"
+              className="inline-flex h-11 items-center justify-center gap-2 rounded bg-[#e50914] px-4 text-sm font-bold text-white transition hover:bg-[#f6121d]"
+            >
+              {isPending ? <SlidersHorizontal className="h-4 w-4 animate-pulse" /> : <Filter className="h-4 w-4" />}
+              Filtrer
+            </button>
+          </form>
+
+          <ExplorePanel activeType={catalog.filters.mediaType} />
+        </div>
       </section>
 
-      <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
+      <div id="catalog" className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
         {catalog.isFiltered ? (
-          <FilteredGrid items={catalog.filteredItems} liked={liked} onLike={toggleLike} />
+          <FilteredGrid
+            items={catalog.filteredItems}
+            liked={liked}
+            onLike={toggleLike}
+            filters={catalog.filters}
+            currentPage={catalog.filteredPage}
+            totalPages={catalog.filteredTotalPages}
+            totalResults={catalog.filteredTotalResults}
+          />
         ) : null}
 
         {sections.map((section) => (
@@ -214,30 +236,163 @@ export function CineVerseHome({ catalog, continueWatching }: Props) {
   );
 }
 
+function ExplorePanel({ activeType }: { activeType?: string }) {
+  const mediaType = activeType === "tv" ? "tv" : "movie";
+  const genres = mediaType === "tv" ? seriesGenres : movieGenres;
+
+  return (
+    <div className="mt-5 overflow-hidden rounded border border-white/10 bg-[#151515] shadow-2xl">
+      <div className="grid grid-cols-2 border-b border-white/10 sm:grid-cols-4">
+        <ExploreTab href="/?type=movie#catalog" active={mediaType === "movie"} icon={Clapperboard}>
+          Films
+        </ExploreTab>
+        <ExploreTab href="/?type=tv#catalog" active={mediaType === "tv"} icon={Tv}>
+          Series
+        </ExploreTab>
+        <ExploreTab href="/?type=movie&minRating=7.5#catalog" icon={Flame}>
+          Les + Notes
+        </ExploreTab>
+        <ExploreTab href="/#catalog" icon={Library}>
+          Catalogue
+        </ExploreTab>
+      </div>
+
+      <div className="grid gap-px bg-white/10 md:grid-cols-[1.1fr_.9fr_.9fr_.8fr]">
+        <ExploreColumn title="Par genre" icon={Grid2X2}>
+          {genres.map((genre) => (
+            <ExploreLink key={genre.id} href={`/?type=${mediaType}&genre=${genre.id}#catalog`}>
+              {genre.name}
+            </ExploreLink>
+          ))}
+        </ExploreColumn>
+        <ExploreColumn title="Par langue" icon={Globe2}>
+          <ExploreLink href={`/?type=${mediaType}#catalog`}>
+            Tous les {mediaType === "movie" ? "films" : "series"}
+          </ExploreLink>
+          {LANGUAGES.map((language) => (
+            <ExploreLink
+              key={language.id}
+              href={`/?type=${mediaType}&language=${language.id}#catalog`}
+            >
+              {language.name}
+            </ExploreLink>
+          ))}
+        </ExploreColumn>
+        <ExploreColumn title="Selections" icon={Sparkles}>
+          <ExploreLink href={`/?type=${mediaType}&minRating=8#catalog`}>Tres bien notes</ExploreLink>
+          <ExploreLink href={`/?type=${mediaType}&yearFrom=2026&yearTo=2026#catalog`}>
+            Nouveautes 2026
+          </ExploreLink>
+          <ExploreLink href={`/?type=${mediaType}&yearFrom=2025&yearTo=2025#catalog`}>
+            Sorties 2025
+          </ExploreLink>
+          <ExploreLink href={`/?type=${mediaType}&genre=16#catalog`}>Animation</ExploreLink>
+        </ExploreColumn>
+        <ExploreColumn title="Par annee" icon={CalendarDays}>
+          {[2026, 2025, 2024, 2023, 2022, 2021].map((year) => (
+            <ExploreLink
+              key={year}
+              href={`/?type=${mediaType}&yearFrom=${year}&yearTo=${year}#catalog`}
+            >
+              {mediaType === "movie" ? "Films" : "Series"} {year}
+            </ExploreLink>
+          ))}
+        </ExploreColumn>
+      </div>
+    </div>
+  );
+}
+
+function ExploreTab({
+  href,
+  active = false,
+  icon: Icon,
+  children,
+}: {
+  href: string;
+  active?: boolean;
+  icon: LucideIcon;
+  children: ReactNode;
+}) {
+  return (
+    <Link
+      href={href}
+      className={`inline-flex h-12 items-center justify-center gap-2 border-b-2 text-sm font-bold transition ${
+        active
+          ? "border-[#e50914] bg-[#e50914]/10 text-white"
+          : "border-transparent bg-[#202020] text-zinc-300 hover:text-white"
+      }`}
+    >
+      <Icon className="h-4 w-4 text-[#ff7a1a]" />
+      {children}
+    </Link>
+  );
+}
+
+function ExploreColumn({
+  title,
+  icon: Icon,
+  children,
+}: {
+  title: string;
+  icon: LucideIcon;
+  children: ReactNode;
+}) {
+  return (
+    <div className="bg-[#151515] p-4">
+      <h3 className="mb-3 flex items-center gap-2 border-b border-[#ff7a1a]/40 pb-2 text-xs font-black uppercase tracking-[0.14em] text-[#ff7a1a]">
+        <Icon className="h-4 w-4" />
+        {title}
+      </h3>
+      <div className="grid gap-1">{children}</div>
+    </div>
+  );
+}
+
+function ExploreLink({ href, children }: { href: string; children: ReactNode }) {
+  return (
+    <Link
+      href={href}
+      className="flex min-h-8 items-center rounded px-2 text-sm text-zinc-300 transition hover:bg-white/10 hover:text-white"
+    >
+      {children}
+    </Link>
+  );
+}
+
 function FilteredGrid({
   items,
   liked,
   onLike,
+  filters,
+  currentPage,
+  totalPages,
+  totalResults,
 }: {
   items: CatalogItem[];
   liked: Record<string, boolean>;
   onLike: (item: CatalogItem) => void;
+  filters: HomeCatalog["filters"];
+  currentPage: number;
+  totalPages: number;
+  totalResults: number;
 }) {
   const [sort, setSort] = useState("new");
-  const [page, setPage] = useState(1);
-  const perPage = 18;
   const sorted = useMemo(() => sortItems(items, sort), [items, sort]);
-  const totalPages = Math.max(1, Math.ceil(sorted.length / perPage));
-  const activePage = Math.min(page, totalPages);
-  const visible = sorted.slice((activePage - 1) * perPage, activePage * perPage);
+  const pageWindow = buildPageWindow(currentPage, totalPages);
 
   function chooseSort(value: string) {
     setSort(value);
-    setPage(1);
   }
 
   return (
     <section className="mb-12 border border-white/10 bg-[#101010] p-3 shadow-2xl sm:p-4">
+      <div className="mb-4 flex items-center justify-between gap-3 text-sm text-zinc-400">
+        <span>{totalResults.toLocaleString("fr-FR")} resultats</span>
+        <span>
+          Page {currentPage} / {totalPages}
+        </span>
+      </div>
       <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
         {[
           ["new", "Nouveautes"],
@@ -262,7 +417,7 @@ function FilteredGrid({
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
-        {visible.map((item) => (
+        {sorted.map((item) => (
           <MediaCard
             key={`filtered-${item.mediaType}-${item.id}`}
             item={item}
@@ -271,30 +426,38 @@ function FilteredGrid({
             compact
           />
         ))}
+        {!sorted.length ? (
+          <div className="col-span-full grid min-h-48 place-items-center border border-white/10 bg-black/20 text-sm text-zinc-400">
+            Aucun resultat
+          </div>
+        ) : null}
       </div>
 
       <div className="mt-7 flex flex-wrap items-center justify-center gap-2">
-        {Array.from({ length: Math.min(totalPages, 10) }, (_, index) => index + 1).map((number) => (
-          <button
+        {pageWindow.map((number, index) =>
+          number === "gap" ? (
+            <span key={`gap-${index}`} className="px-2 text-zinc-400">
+              ...
+            </span>
+          ) : (
+            <Link
             key={number}
-            type="button"
-            onClick={() => setPage(number)}
+            href={pageHref(filters, number)}
             className={`h-9 min-w-9 px-3 text-sm font-bold ${
-              activePage === number ? "bg-[#e50914] text-white" : "bg-white/10 text-zinc-200"
+              currentPage === number ? "bg-[#e50914] text-white" : "bg-white/10 text-zinc-200"
             }`}
           >
             {number}
-          </button>
-        ))}
-        {totalPages > 10 ? <span className="px-2 text-zinc-400">...</span> : null}
-        <button
-          type="button"
-          onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+            </Link>
+          ),
+        )}
+        <Link
+          href={pageHref(filters, Math.min(totalPages, currentPage + 1))}
           className="inline-flex h-9 min-w-9 items-center justify-center bg-white/10 text-zinc-200"
           aria-label="Page suivante"
         >
           <ChevronRight className="h-4 w-4" />
-        </button>
+        </Link>
       </div>
     </section>
   );
@@ -365,6 +528,33 @@ function sortItems(items: CatalogItem[], sort: string) {
   });
 }
 
+function pageHref(filters: HomeCatalog["filters"], page: number) {
+  const params = new URLSearchParams();
+  if (filters.query) params.set("q", filters.query);
+  if (filters.mediaType) params.set("type", filters.mediaType);
+  if (filters.genre) params.set("genre", filters.genre);
+  if (filters.yearFrom) params.set("yearFrom", filters.yearFrom);
+  if (filters.yearTo) params.set("yearTo", filters.yearTo);
+  if (filters.minRating) params.set("minRating", filters.minRating);
+  if (filters.language) params.set("language", filters.language);
+  if (page > 1) params.set("page", String(page));
+  const query = params.toString();
+  return query ? `/?${query}#catalog` : "/#catalog";
+}
+
+function buildPageWindow(currentPage: number, totalPages: number) {
+  const pages = new Set<number>([1, totalPages, currentPage]);
+  for (let offset = -2; offset <= 2; offset += 1) {
+    const page = currentPage + offset;
+    if (page >= 1 && page <= totalPages) pages.add(page);
+  }
+  const sorted = [...pages].sort((a, b) => a - b);
+  return sorted.flatMap((page, index) => {
+    const previous = sorted[index - 1];
+    return previous && page - previous > 1 ? (["gap", page] as const) : [page];
+  });
+}
+
 function progressToCatalogItem(progress: WatchProgress): CatalogItem {
   return {
     id: progress.tmdbId,
@@ -389,3 +579,23 @@ function progressToCatalogItem(progress: WatchProgress): CatalogItem {
 function yearOf(date: string | null) {
   return date ? date.slice(0, 4) : "CineVerse";
 }
+
+const movieGenres = GENRES;
+
+const seriesGenres = [
+  { id: 10759, name: "Action & Aventure" },
+  { id: 16, name: "Animation" },
+  { id: 35, name: "Comedie" },
+  { id: 80, name: "Crime" },
+  { id: 99, name: "Documentaire" },
+  { id: 18, name: "Drame" },
+  { id: 10751, name: "Famille" },
+  { id: 10765, name: "Science-fiction & Fantastique" },
+  { id: 9648, name: "Mystere" },
+  { id: 10768, name: "Guerre & Politique" },
+  { id: 37, name: "Western" },
+];
+
+const allGenres = Array.from(
+  new Map([...movieGenres, ...seriesGenres].map((genre) => [genre.id, genre])).values(),
+);

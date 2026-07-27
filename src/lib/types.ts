@@ -39,6 +39,9 @@ export type HomeCatalog = {
   filters: CatalogFilters;
   filteredItems: CatalogItem[];
   isFiltered: boolean;
+  filteredPage: number;
+  filteredTotalPages: number;
+  filteredTotalResults: number;
 };
 
 export type CatalogFilters = {
@@ -49,6 +52,7 @@ export type CatalogFilters = {
   yearTo?: string;
   minRating?: string;
   language?: string;
+  page?: string;
 };
 
 export type WatchProgress = {

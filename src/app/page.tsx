@@ -18,6 +18,7 @@ export default async function Home({ searchParams }: PageProps) {
     yearTo: valueOf(params.yearTo),
     minRating: valueOf(params.minRating),
     language: valueOf(params.language),
+    page: valueOf(params.page),
   });
   const continueWatching = getContinueWatching();
 

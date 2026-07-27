@@ -38,11 +38,14 @@ Par defaut, CineVerse utilise un lecteur de demonstration local qui emet des eve
 Placeholders disponibles dans les templates:
 
 - `{tmdbId}`
-- `{mediaType}`
+- `{mediaType}` ou `{providerMediaType}`: `movie` pour films, `serie` pour series
+- `{tmdbMediaType}`: `movie` ou `tv`
 - `{title}`
 - `{language}`
+- `{languagePath}`: vide pour VO, sinon `/vf` ou `/vostfr`
 - `{season}`
 - `{episode}`
+- `{seasonEpisodePath}`: vide pour films, sinon `/{season}/{episode}`
 
 Exemple:
 
@@ -51,7 +54,7 @@ Exemple:
   {
     "id": "my-provider",
     "name": "My Provider",
-    "template": "https://example.test/embed/{mediaType}/{tmdbId}?lang={language}&s={season}&e={episode}",
+    "template": "https://example.test/embed/{mediaType}/{tmdbId}{seasonEpisodePath}{languagePath}",
     "supportsTracking": true,
     "supportsLanguage": true,
     "priority": 1

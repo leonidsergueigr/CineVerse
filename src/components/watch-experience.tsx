@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { ArrowLeft, Heart, Languages, Play, Server, Star } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { buildEmbedUrl } from "@/lib/providers";
 import type { EmbedProvider, MediaDetails, WatchProgress } from "@/lib/types";
 
 type Props = {
@@ -35,18 +36,12 @@ export function WatchExperience({
   const provider = providers.find((item) => item.id === providerId) ?? providers[0];
   const iframeUrl = useMemo(() => {
     if (!provider) return "";
-    const values: Record<string, string> = {
-      tmdbId: String(detail.id),
-      mediaType: detail.mediaType,
-      title: detail.title,
+    return buildEmbedUrl(provider, detail, {
       language,
-      season: String(season),
-      episode: String(episode),
-    };
-    return provider.template.replace(/\{(\w+)\}/g, (_, key: string) =>
-      encodeURIComponent(values[key] ?? ""),
-    );
-  }, [detail.id, detail.mediaType, detail.title, episode, language, provider, season]);
+      seasonNumber: season,
+      episodeNumber: episode,
+    });
+  }, [detail, episode, language, provider, season]);
 
   useEffect(() => {
     function onMessage(event: MessageEvent) {
@@ -212,7 +207,7 @@ export function WatchExperience({
                   <select
                     value={providerId}
                     onChange={(event) => setProviderId(event.target.value)}
-                    className="h-10 rounded border border-white/10 bg-white/[0.08] px-3 text-sm outline-none focus:border-[#e50914]"
+                    className="control-field w-full"
                   >
                     {providers.map((item) => (
                       <option key={item.id} value={item.id}>
@@ -226,7 +221,7 @@ export function WatchExperience({
                   <select
                     value={language}
                     onChange={(event) => setLanguage(event.target.value)}
-                    className="h-10 rounded border border-white/10 bg-white/[0.08] px-3 text-sm outline-none focus:border-[#e50914]"
+                    className="control-field w-full"
                   >
                     <option value="vostfr">VOSTFR</option>
                     <option value="vf">VF</option>
@@ -238,7 +233,7 @@ export function WatchExperience({
                     <select
                       value={season}
                       onChange={(event) => setSeason(Number(event.target.value))}
-                      className="h-10 rounded border border-white/10 bg-white/[0.08] px-3 text-sm outline-none focus:border-[#e50914]"
+                      className="control-field w-full"
                     >
                       {(detail.seasons ?? []).map((item) => (
                         <option key={item.id} value={item.seasonNumber}>
@@ -251,7 +246,7 @@ export function WatchExperience({
                       onChange={(event) => setEpisode(Math.max(1, Number(event.target.value) || 1))}
                       min={1}
                       type="number"
-                      className="h-10 rounded border border-white/10 bg-white/[0.08] px-3 text-sm outline-none focus:border-[#e50914]"
+                      className="control-field w-full"
                     />
                   </div>
                 ) : null}

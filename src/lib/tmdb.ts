@@ -27,7 +27,10 @@ type TmdbResult = {
 };
 
 type TmdbList = {
+  page?: number;
   results?: TmdbResult[];
+  total_pages?: number;
+  total_results?: number;
 };
 
 type TmdbVideo = {
@@ -76,7 +79,9 @@ export async function getHomeCatalog(filters: CatalogFilters): Promise<HomeCatal
       },
       true,
     ),
-    hasActiveFilters ? discover(filters) : Promise.resolve([]),
+    hasActiveFilters
+      ? discoverWithMeta(filters)
+      : Promise.resolve({ items: [], page: 1, totalPages: 1, totalResults: 0 }),
   ]);
 
   const sections = [
@@ -84,7 +89,7 @@ export async function getHomeCatalog(filters: CatalogFilters): Promise<HomeCatal
     { id: "series", title: "Series a devorer", items: trendingTv },
     { id: "mood", title: "Soiree science-fiction", items: mood },
   ];
-  const hero = filtered[0] ?? trendingMovies[0] ?? fallbackCatalog()[0];
+  const hero = filtered.items[0] ?? trendingMovies[0] ?? fallbackCatalog()[0];
   const heroTrailerUrl = await getTrailerUrl(hero.mediaType, hero.id);
 
   return {
@@ -92,8 +97,11 @@ export async function getHomeCatalog(filters: CatalogFilters): Promise<HomeCatal
     heroTrailerUrl,
     sections,
     filters,
-    filteredItems: filtered,
+    filteredItems: filtered.items,
     isFiltered: hasActiveFilters,
+    filteredPage: filtered.page,
+    filteredTotalPages: filtered.totalPages,
+    filteredTotalResults: filtered.totalResults,
   };
 }
 
@@ -103,14 +111,20 @@ export async function getTrending(mediaType: MediaType) {
 }
 
 export async function discover(filters: CatalogFilters, withFallback = false) {
+  const result = await discoverWithMeta(filters, withFallback);
+  return result.items;
+}
+
+export async function discoverWithMeta(filters: CatalogFilters, withFallback = false) {
   if (filters.query) {
-    return search(filters.query, filters.mediaType, withFallback);
+    return searchWithMeta(filters.query, filters.mediaType, filters.page, withFallback);
   }
 
   const mediaType = filters.mediaType === "tv" ? "tv" : "movie";
   const params: Record<string, string> = {
     sort_by: "popularity.desc",
     include_adult: "false",
+    page: normalizedPage(filters.page),
   };
 
   if (filters.genre) params.with_genres = filters.genre;
@@ -126,17 +140,28 @@ export async function discover(filters: CatalogFilters, withFallback = false) {
   }
 
   const data = await tmdb<TmdbList>(`/discover/${mediaType}`, params);
-  return normalizeList(data?.results, mediaType, withFallback);
+  return normalizeMeta(data, mediaType, withFallback);
 }
 
 export async function search(query: string, mediaType?: string, withFallback = false) {
+  const result = await searchWithMeta(query, mediaType, undefined, withFallback);
+  return result.items;
+}
+
+export async function searchWithMeta(
+  query: string,
+  mediaType?: string,
+  page?: string,
+  withFallback = false,
+) {
   const type = mediaType === "movie" || mediaType === "tv" ? mediaType : "multi";
   const data = await tmdb<TmdbList>(`/search/${type}`, {
     query,
     include_adult: "false",
+    page: normalizedPage(page),
   });
 
-  return normalizeList(data?.results, type === "multi" ? undefined : type, withFallback);
+  return normalizeMeta(data, type === "multi" ? undefined : type, withFallback);
 }
 
 export async function getDetails(mediaType: MediaType, id: number): Promise<MediaDetails> {
@@ -220,6 +245,22 @@ function normalizeList(
     .filter((item): item is CatalogItem => Boolean(item));
 
   return normalized.length || !withFallback ? normalized : fallbackCatalog();
+}
+
+function normalizeMeta(data: TmdbList | null, forcedType?: MediaType, withFallback = false) {
+  const items = normalizeList(data?.results, forcedType, withFallback);
+  return {
+    items,
+    page: data?.page ?? 1,
+    totalPages: Math.max(1, Math.min(data?.total_pages ?? 1, 500)),
+    totalResults: data?.total_results ?? items.length,
+  };
+}
+
+function normalizedPage(page?: string) {
+  const value = Number(page);
+  if (!Number.isFinite(value)) return "1";
+  return String(Math.max(1, Math.floor(value)));
 }
 
 function normalizeItem(result: TmdbResult, forcedType?: MediaType): CatalogItem | null {
