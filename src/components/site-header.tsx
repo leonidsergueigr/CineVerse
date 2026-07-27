@@ -1,5 +1,10 @@
+"use client";
+
 import Link from "next/link";
-import { Clapperboard, Search, Tv } from "lucide-react";
+import { ChevronDown, Search } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { GENRES, LANGUAGES, SERIES_GENRES } from "@/lib/genres";
+import type { MediaType } from "@/lib/types";
 
 type Props = {
   query?: string;
@@ -7,42 +12,230 @@ type Props = {
 };
 
 export function SiteHeader({ query, fixed = true }: Props) {
+  const [openMenu, setOpenMenu] = useState<MediaType | null>(null);
+  const headerRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    function closeOnOutsideClick(event: MouseEvent) {
+      if (!headerRef.current?.contains(event.target as Node)) setOpenMenu(null);
+    }
+
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpenMenu(null);
+    }
+
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, []);
+
   return (
     <header
-      className={`${fixed ? "fixed" : "sticky"} inset-x-0 top-0 z-30 border-b border-white/5 bg-black/65 backdrop-blur-xl`}
+      ref={headerRef}
+      className={`${fixed ? "fixed" : "sticky"} inset-x-0 top-0 z-30 border-b border-white/10 bg-[#070707]/95 backdrop-blur-xl`}
     >
-      <div className="mx-auto grid h-16 max-w-7xl grid-cols-1 items-center gap-3 px-4 sm:px-6 md:grid-cols-[minmax(220px,360px)_auto_1fr] lg:px-8">
-        <form action="/browse" className="relative hidden md:block">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+      <div className="mx-auto grid h-16 max-w-7xl grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-5 px-4 sm:px-6 lg:gap-10 lg:px-8">
+        <Link
+          href="/"
+          onClick={() => setOpenMenu(null)}
+          className="text-xl font-black tracking-[0.16em] text-[#e50914] sm:text-2xl"
+        >
+          CineVerse
+        </Link>
+
+        <form action="/browse" className="relative hidden w-full max-w-xl md:block">
+          <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
           <input
             name="q"
             defaultValue={query}
             placeholder="Titre, acteur, realisateur..."
-            className="h-10 w-full rounded border border-white/10 bg-white/[0.08] pl-10 pr-3 text-sm text-white outline-none transition placeholder:text-zinc-500 focus:border-[#e50914]"
+            className="h-10 w-full rounded-full border border-white/15 bg-white/[0.07] pl-11 pr-4 text-sm text-white outline-none transition placeholder:text-zinc-500 focus:border-[#e50914] focus:bg-white/[0.1]"
           />
         </form>
 
-        <Link href="/" className="text-2xl font-black tracking-[0.18em] text-[#e50914]">
-          CineVerse
-        </Link>
-
-        <nav className="hidden items-center justify-end gap-5 text-sm font-medium text-zinc-300 md:flex">
-          <Link
-            href="/browse?type=movie"
-            className="inline-flex items-center gap-2 transition hover:text-white"
-          >
-            <Clapperboard className="h-4 w-4 text-[#ff7a1a]" />
-            Films
-          </Link>
-          <Link
-            href="/browse?type=tv"
-            className="inline-flex items-center gap-2 transition hover:text-white"
-          >
-            <Tv className="h-4 w-4 text-[#ff7a1a]" />
-            Series
-          </Link>
+        <nav className="flex h-full items-center gap-1 text-sm font-medium text-zinc-300">
+          <NavMenuButton
+            label="Films"
+            open={openMenu === "movie"}
+            onClick={() => setOpenMenu((current) => (current === "movie" ? null : "movie"))}
+          />
+          <NavMenuButton
+            label="Series"
+            open={openMenu === "tv"}
+            onClick={() => setOpenMenu((current) => (current === "tv" ? null : "tv"))}
+          />
         </nav>
       </div>
+
+      {openMenu ? (
+        <BrowseMenu mediaType={openMenu} onNavigate={() => setOpenMenu(null)} />
+      ) : null}
     </header>
+  );
+}
+
+function NavMenuButton({
+  label,
+  open,
+  onClick,
+}: {
+  label: string;
+  open: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-expanded={open}
+      className={`inline-flex h-full items-center gap-1.5 border-b-2 px-3 transition ${
+        open
+          ? "border-[#e50914] text-white"
+          : "border-transparent text-zinc-300 hover:text-white"
+      }`}
+    >
+      {label}
+      <ChevronDown className={`h-4 w-4 transition ${open ? "rotate-180" : ""}`} />
+    </button>
+  );
+}
+
+function BrowseMenu({
+  mediaType,
+  onNavigate,
+}: {
+  mediaType: MediaType;
+  onNavigate: () => void;
+}) {
+  const isMovie = mediaType === "movie";
+  const genres = isMovie ? GENRES : SERIES_GENRES;
+  const label = isMovie ? "films" : "series";
+
+  return (
+    <div className="absolute inset-x-0 top-full border-b border-white/10 bg-black/95 shadow-2xl">
+      <div className="mx-auto max-h-[calc(100vh-5rem)] max-w-6xl overflow-y-auto px-4 py-5 sm:px-6 lg:px-8">
+        <div className="mb-4 flex items-center justify-between border-b border-white/10 pb-4">
+          <div>
+            <p className="text-xs font-bold uppercase text-zinc-500">Explorer</p>
+            <h2 className="mt-1 text-lg font-bold text-white">
+              {isMovie ? "Films" : "Series"}
+            </h2>
+          </div>
+          <MenuLink href={`/browse?type=${mediaType}`} onNavigate={onNavigate} prominent>
+            Tous les {label}
+          </MenuLink>
+        </div>
+
+        <div className="grid gap-px overflow-hidden rounded border border-white/10 bg-white/10 md:grid-cols-[1.15fr_.9fr_.9fr_.75fr]">
+          <MenuColumn title="Par genre">
+            <div className="grid gap-1 sm:grid-cols-2 md:grid-cols-1 lg:grid-cols-2">
+              {genres.map((genre) => (
+                <MenuLink
+                  key={genre.id}
+                  href={`/browse?type=${mediaType}&genre=${genre.id}`}
+                  onNavigate={onNavigate}
+                >
+                  {genre.name}
+                </MenuLink>
+              ))}
+            </div>
+          </MenuColumn>
+
+          <MenuColumn title="Par langue">
+            <MenuLink href={`/browse?type=${mediaType}`} onNavigate={onNavigate}>
+              Toutes les langues
+            </MenuLink>
+            {LANGUAGES.map((language) => (
+              <MenuLink
+                key={language.id}
+                href={`/browse?type=${mediaType}&originalLanguage=${language.id}`}
+                onNavigate={onNavigate}
+              >
+                {language.name}
+              </MenuLink>
+            ))}
+          </MenuColumn>
+
+          <MenuColumn title="Selections">
+            <MenuLink
+              href={`/browse?type=${mediaType}&minRating=8&sort=rating`}
+              onNavigate={onNavigate}
+            >
+              Tres bien notes
+            </MenuLink>
+            <MenuLink
+              href={`/browse?type=${mediaType}&yearFrom=2026&yearTo=2026&sort=new`}
+              onNavigate={onNavigate}
+            >
+              Nouveautes 2026
+            </MenuLink>
+            <MenuLink
+              href={`/browse?type=${mediaType}&yearFrom=2025&yearTo=2025`}
+              onNavigate={onNavigate}
+            >
+              Sorties 2025
+            </MenuLink>
+            <MenuLink
+              href={`/browse?type=${mediaType}&genre=16`}
+              onNavigate={onNavigate}
+            >
+              Animation
+            </MenuLink>
+          </MenuColumn>
+
+          <MenuColumn title="Par annee">
+            {[2026, 2025, 2024, 2023, 2022, 2021].map((year) => (
+              <MenuLink
+                key={year}
+                href={`/browse?type=${mediaType}&yearFrom=${year}&yearTo=${year}`}
+                onNavigate={onNavigate}
+              >
+                {year}
+              </MenuLink>
+            ))}
+          </MenuColumn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MenuColumn({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="bg-[#121212] p-4">
+      <h3 className="mb-3 border-b border-[#e50914]/50 pb-2 text-xs font-black uppercase text-zinc-400">
+        {title}
+      </h3>
+      <div className="grid gap-1">{children}</div>
+    </section>
+  );
+}
+
+function MenuLink({
+  href,
+  children,
+  onNavigate,
+  prominent = false,
+}: {
+  href: string;
+  children: React.ReactNode;
+  onNavigate: () => void;
+  prominent?: boolean;
+}) {
+  return (
+    <Link
+      href={href}
+      onClick={onNavigate}
+      className={`flex min-h-8 items-center rounded px-2 text-sm transition ${
+        prominent
+          ? "bg-[#e50914] px-4 font-bold text-white hover:bg-[#f6121d]"
+          : "text-zinc-300 hover:bg-white/10 hover:text-white"
+      }`}
+    >
+      {children}
+    </Link>
   );
 }

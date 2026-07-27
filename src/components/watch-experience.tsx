@@ -359,7 +359,7 @@ export function WatchExperience({
                 {detail.mediaType === "tv" ? (
                   <label className="flex h-10 items-center justify-between rounded bg-white/[0.06] px-3 text-sm text-zinc-200 ring-1 ring-white/10">
                     <span className="inline-flex items-center gap-2">
-                      <ToggleRight className="h-4 w-4 text-[#ff7a1a]" />
+                      <ToggleRight className="h-4 w-4 text-zinc-400" />
                       Episode suivant
                     </span>
                     <input

@@ -2,26 +2,16 @@
 
 import Link from "next/link";
 import {
-  CalendarDays,
   ChevronRight,
-  Clapperboard,
   Filter,
-  Flame,
-  Globe2,
-  Grid2X2,
   Heart,
-  Library,
   Play,
   Search,
   SlidersHorizontal,
-  Sparkles,
   Star,
-  Tv,
 } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
 import { useMemo, useState, useTransition } from "react";
-import type { ReactNode } from "react";
-import { GENRES, LANGUAGES } from "@/lib/genres";
+import { GENRES, LANGUAGES, SERIES_GENRES } from "@/lib/genres";
 import type { BrowseCatalog, CatalogItem, HomeCatalog, WatchProgress } from "@/lib/types";
 import { SiteHeader } from "@/components/site-header";
 
@@ -236,10 +226,6 @@ export function BrowseExperience({ catalog }: { catalog: BrowseCatalog }) {
               Filtrer
             </button>
           </form>
-
-          {catalog.filters.mediaType === "movie" || catalog.filters.mediaType === "tv" ? (
-            <ExplorePanel activeType={catalog.filters.mediaType} />
-          ) : null}
         </div>
       </section>
 
@@ -255,130 +241,6 @@ export function BrowseExperience({ catalog }: { catalog: BrowseCatalog }) {
         />
       </div>
     </main>
-  );
-}
-
-function ExplorePanel({ activeType }: { activeType?: string }) {
-  const mediaType = activeType === "tv" ? "tv" : "movie";
-  const genres = mediaType === "tv" ? seriesGenres : movieGenres;
-
-  return (
-    <div className="mt-5 overflow-hidden rounded border border-white/10 bg-[#151515] shadow-2xl">
-      <div className="grid grid-cols-2 border-b border-white/10 sm:grid-cols-4">
-        <ExploreTab href="/browse?type=movie" active={mediaType === "movie"} icon={Clapperboard}>
-          Films
-        </ExploreTab>
-        <ExploreTab href="/browse?type=tv" active={mediaType === "tv"} icon={Tv}>
-          Series
-        </ExploreTab>
-        <ExploreTab href="/browse?type=movie&minRating=7.5" icon={Flame}>
-          Les + Notes
-        </ExploreTab>
-        <ExploreTab href="/browse" icon={Library}>
-          Catalogue
-        </ExploreTab>
-      </div>
-
-      <div className="grid gap-px bg-white/10 md:grid-cols-[1.1fr_.9fr_.9fr_.8fr]">
-        <ExploreColumn title="Par genre" icon={Grid2X2}>
-          {genres.map((genre) => (
-            <ExploreLink key={genre.id} href={`/browse?type=${mediaType}&genre=${genre.id}`}>
-              {genre.name}
-            </ExploreLink>
-          ))}
-        </ExploreColumn>
-        <ExploreColumn title="Par langue" icon={Globe2}>
-          <ExploreLink href={`/browse?type=${mediaType}`}>
-            Tous les {mediaType === "movie" ? "films" : "series"}
-          </ExploreLink>
-          {LANGUAGES.map((language) => (
-            <ExploreLink
-              key={language.id}
-              href={`/browse?type=${mediaType}&originalLanguage=${language.id}`}
-            >
-              {language.name}
-            </ExploreLink>
-          ))}
-        </ExploreColumn>
-        <ExploreColumn title="Selections" icon={Sparkles}>
-          <ExploreLink href={`/browse?type=${mediaType}&minRating=8`}>Tres bien notes</ExploreLink>
-          <ExploreLink href={`/browse?type=${mediaType}&yearFrom=2026&yearTo=2026`}>
-            Nouveautes 2026
-          </ExploreLink>
-          <ExploreLink href={`/browse?type=${mediaType}&yearFrom=2025&yearTo=2025`}>
-            Sorties 2025
-          </ExploreLink>
-          <ExploreLink href={`/browse?type=${mediaType}&genre=16`}>Animation</ExploreLink>
-        </ExploreColumn>
-        <ExploreColumn title="Par annee" icon={CalendarDays}>
-          {[2026, 2025, 2024, 2023, 2022, 2021].map((year) => (
-            <ExploreLink
-              key={year}
-              href={`/browse?type=${mediaType}&yearFrom=${year}&yearTo=${year}`}
-            >
-              {mediaType === "movie" ? "Films" : "Series"} {year}
-            </ExploreLink>
-          ))}
-        </ExploreColumn>
-      </div>
-    </div>
-  );
-}
-
-function ExploreTab({
-  href,
-  active = false,
-  icon: Icon,
-  children,
-}: {
-  href: string;
-  active?: boolean;
-  icon: LucideIcon;
-  children: ReactNode;
-}) {
-  return (
-    <Link
-      href={href}
-      className={`inline-flex h-12 items-center justify-center gap-2 border-b-2 text-sm font-bold transition ${
-        active
-          ? "border-[#e50914] bg-[#e50914]/10 text-white"
-          : "border-transparent bg-[#202020] text-zinc-300 hover:text-white"
-      }`}
-    >
-      <Icon className="h-4 w-4 text-[#ff7a1a]" />
-      {children}
-    </Link>
-  );
-}
-
-function ExploreColumn({
-  title,
-  icon: Icon,
-  children,
-}: {
-  title: string;
-  icon: LucideIcon;
-  children: ReactNode;
-}) {
-  return (
-    <div className="bg-[#151515] p-4">
-      <h3 className="mb-3 flex items-center gap-2 border-b border-[#ff7a1a]/40 pb-2 text-xs font-black uppercase tracking-[0.14em] text-[#ff7a1a]">
-        <Icon className="h-4 w-4" />
-        {title}
-      </h3>
-      <div className="grid gap-1">{children}</div>
-    </div>
-  );
-}
-
-function ExploreLink({ href, children }: { href: string; children: ReactNode }) {
-  return (
-    <Link
-      href={href}
-      className="flex min-h-8 items-center rounded px-2 text-sm text-zinc-300 transition hover:bg-white/10 hover:text-white"
-    >
-      {children}
-    </Link>
   );
 }
 
@@ -427,8 +289,8 @@ function FilteredGrid({
             }}
             className={`h-9 border text-xs font-bold transition ${
               sort === value
-                ? "border-[#ff7a1a] bg-[#e50914] text-white"
-                : "border-white/10 bg-white/[0.07] text-zinc-300 hover:border-[#ff7a1a]"
+                ? "border-[#e50914] bg-[#e50914] text-white"
+                : "border-white/10 bg-white/[0.07] text-zinc-300 hover:border-zinc-500"
             }`}
           >
             {label}
@@ -605,16 +467,4 @@ function yearOf(date: string | null) {
 
 const movieGenres = GENRES;
 
-const seriesGenres = [
-  { id: 10759, name: "Action & Aventure" },
-  { id: 16, name: "Animation" },
-  { id: 35, name: "Comedie" },
-  { id: 80, name: "Crime" },
-  { id: 99, name: "Documentaire" },
-  { id: 18, name: "Drame" },
-  { id: 10751, name: "Famille" },
-  { id: 10765, name: "Science-fiction & Fantastique" },
-  { id: 9648, name: "Mystere" },
-  { id: 10768, name: "Guerre & Politique" },
-  { id: 37, name: "Western" },
-];
+const seriesGenres = SERIES_GENRES;

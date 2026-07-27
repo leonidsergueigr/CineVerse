@@ -21,3 +21,17 @@ export const LANGUAGES = [
   { id: "ko", name: "Coreen" },
   { id: "es", name: "Espagnol" },
 ];
+
+export const SERIES_GENRES = [
+  { id: 10759, name: "Action & Aventure" },
+  { id: 16, name: "Animation" },
+  { id: 35, name: "Comedie" },
+  { id: 80, name: "Crime" },
+  { id: 99, name: "Documentaire" },
+  { id: 18, name: "Drame" },
+  { id: 10751, name: "Famille" },
+  { id: 10765, name: "Science-fiction & Fantastique" },
+  { id: 9648, name: "Mystere" },
+  { id: 10768, name: "Guerre & Politique" },
+  { id: 37, name: "Western" },
+];
