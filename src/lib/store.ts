@@ -71,7 +71,32 @@ export function saveProgress(input: ProgressInput) {
   const completed =
     input.durationSeconds > 0 && input.progressSeconds / input.durationSeconds >= 0.9 ? 1 : 0;
 
-  getDb()
+  const database = getDb();
+  const payload = { ...input, completed };
+
+  const updated = database
+    .prepare(
+      `
+      update watch_history set
+        title = @title,
+        poster_path = @posterPath,
+        backdrop_path = @backdropPath,
+        progress_seconds = @progressSeconds,
+        duration_seconds = @durationSeconds,
+        completed = @completed,
+        updated_at = datetime('now')
+      where user_id = 'local'
+        and tmdb_id = @tmdbId
+        and media_type = @mediaType
+        and coalesce(season_number, -1) = coalesce(@seasonNumber, -1)
+        and coalesce(episode_number, -1) = coalesce(@episodeNumber, -1)
+    `,
+    )
+    .run(payload);
+
+  if (updated.changes > 0) return;
+
+  database
     .prepare(
       `
       insert into watch_history (
@@ -80,18 +105,9 @@ export function saveProgress(input: ProgressInput) {
       )
       values ('local', @tmdbId, @mediaType, @seasonNumber, @episodeNumber, @title,
         @posterPath, @backdropPath, @progressSeconds, @durationSeconds, @completed, datetime('now'))
-      on conflict(user_id, tmdb_id, media_type, season_number, episode_number)
-      do update set
-        title = excluded.title,
-        poster_path = excluded.poster_path,
-        backdrop_path = excluded.backdrop_path,
-        progress_seconds = excluded.progress_seconds,
-        duration_seconds = excluded.duration_seconds,
-        completed = excluded.completed,
-        updated_at = datetime('now')
     `,
     )
-    .run({ ...input, completed });
+    .run(payload);
 }
 
 export function getProgress(
@@ -122,7 +138,14 @@ export function getContinueWatching(limit = 12): WatchProgress[] {
     .prepare(
       `
       select * from watch_history
-      where user_id = 'local' and completed = 0 and progress_seconds > 0
+      where id in (
+        select max(id)
+        from watch_history
+        where user_id = 'local'
+        group by user_id, tmdb_id, media_type, coalesce(season_number, -1), coalesce(episode_number, -1)
+      )
+        and completed = 0
+        and progress_seconds > 0
       order by updated_at desc
       limit ?
     `,
