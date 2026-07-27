@@ -46,6 +46,18 @@ Placeholders disponibles dans les templates:
 - `{season}`
 - `{episode}`
 - `{seasonEpisodePath}`: vide pour films, sinon `/{season}/{episode}`
+- `{autoplay}` et `{autoNext}`: `1` ou `0`
+
+Tu peux aussi declarer les langues exposees par un provider:
+
+```json
+"languages": [
+  { "id": "vf", "label": "VF" },
+  { "id": "vostfr", "label": "VOSTFR" }
+]
+```
+
+Si `languages` est absent, CineVerse propose `VF`, `VOSTFR`, puis `VO`, avec `VF` preselectionne.
 
 Exemple:
 

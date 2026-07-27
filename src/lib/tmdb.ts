@@ -1,5 +1,7 @@
 import { fallbackCatalog, fallbackDetails } from "@/lib/fallback-data";
+import dns from "node:dns";
 import type {
+  BrowseCatalog,
   CatalogFilters,
   CatalogItem,
   HomeCatalog,
@@ -9,6 +11,8 @@ import type {
 
 const TMDB_BASE_URL = "https://api.themoviedb.org/3";
 const IMAGE_BASE_URL = "https://image.tmdb.org/t/p";
+
+dns.setDefaultResultOrder("ipv4first");
 
 type TmdbResult = {
   id: number;
@@ -49,6 +53,19 @@ type TmdbDetails = TmdbResult & {
   runtime?: number;
   episode_run_time?: number[];
   genres?: Array<{ id: number; name: string }>;
+  credits?: {
+    cast?: Array<{
+      id: number;
+      name: string;
+      character?: string;
+      profile_path?: string | null;
+    }>;
+    crew?: Array<{
+      id: number;
+      name: string;
+      job?: string;
+    }>;
+  };
   seasons?: Array<{
     id: number;
     name: string;
@@ -57,18 +74,8 @@ type TmdbDetails = TmdbResult & {
   }>;
 };
 
-export async function getHomeCatalog(filters: CatalogFilters): Promise<HomeCatalog> {
-  const hasActiveFilters = Boolean(
-    filters.query ||
-      filters.mediaType ||
-      filters.genre ||
-      filters.yearFrom ||
-      filters.yearTo ||
-      filters.minRating ||
-      filters.language,
-  );
-
-  const [trendingMovies, trendingTv, mood, filtered] = await Promise.all([
+export async function getHomeCatalog(): Promise<HomeCatalog> {
+  const [trendingMovies, trendingTv, mood] = await Promise.all([
     getTrending("movie"),
     getTrending("tv"),
     discover(
@@ -79,9 +86,6 @@ export async function getHomeCatalog(filters: CatalogFilters): Promise<HomeCatal
       },
       true,
     ),
-    hasActiveFilters
-      ? discoverWithMeta(filters)
-      : Promise.resolve({ items: [], page: 1, totalPages: 1, totalResults: 0 }),
   ]);
 
   const sections = [
@@ -89,19 +93,24 @@ export async function getHomeCatalog(filters: CatalogFilters): Promise<HomeCatal
     { id: "series", title: "Series a devorer", items: trendingTv },
     { id: "mood", title: "Soiree science-fiction", items: mood },
   ];
-  const hero = filtered.items[0] ?? trendingMovies[0] ?? fallbackCatalog()[0];
+  const hero = trendingMovies[0] ?? fallbackCatalog()[0];
   const heroTrailerUrl = await getTrailerUrl(hero.mediaType, hero.id);
 
   return {
     hero,
     heroTrailerUrl,
     sections,
+  };
+}
+
+export async function getBrowseCatalog(filters: CatalogFilters): Promise<BrowseCatalog> {
+  const result = filters.query
+    ? await searchWithMeta(filters.query, filters.mediaType, filters.page)
+    : await discoverWithMeta(filters);
+
+  return {
+    ...result,
     filters,
-    filteredItems: filtered.items,
-    isFiltered: hasActiveFilters,
-    filteredPage: filtered.page,
-    filteredTotalPages: filtered.totalPages,
-    filteredTotalResults: filtered.totalResults,
   };
 }
 
@@ -122,14 +131,19 @@ export async function discoverWithMeta(filters: CatalogFilters, withFallback = f
 
   const mediaType = filters.mediaType === "tv" ? "tv" : "movie";
   const params: Record<string, string> = {
-    sort_by: "popularity.desc",
+    sort_by: tmdbSort(filters.sort, mediaType),
     include_adult: "false",
     page: normalizedPage(filters.page),
   };
 
-  if (filters.genre) params.with_genres = filters.genre;
+  const genre = genreForMediaType(filters.genre, mediaType);
+  if (genre) params.with_genres = genre;
   if (filters.minRating) params["vote_average.gte"] = filters.minRating;
-  if (filters.language) params.with_original_language = filters.language;
+  if (filters.originalLanguage) params.with_original_language = filters.originalLanguage;
+  if (filters.person) {
+    params[mediaType === "tv" ? "with_people" : "with_cast"] = filters.person;
+  }
+  if (filters.sort === "rating") params["vote_count.gte"] = "80";
 
   if (mediaType === "movie") {
     if (filters.yearFrom) params["primary_release_date.gte"] = `${filters.yearFrom}-01-01`;
@@ -165,7 +179,9 @@ export async function searchWithMeta(
 }
 
 export async function getDetails(mediaType: MediaType, id: number): Promise<MediaDetails> {
-  const data = await tmdb<TmdbDetails>(`/${mediaType}/${id}`, {});
+  const data = await tmdb<TmdbDetails>(`/${mediaType}/${id}`, {
+    append_to_response: "credits",
+  });
   if (!data) return fallbackDetails(mediaType, id);
 
   const item = normalizeItem(data, mediaType);
@@ -175,6 +191,26 @@ export async function getDetails(mediaType: MediaType, id: number): Promise<Medi
     ...item,
     runtime: data.runtime ?? data.episode_run_time?.[0] ?? null,
     genres: data.genres ?? [],
+    cast:
+      data.credits?.cast?.slice(0, 12).map((person) => ({
+        id: person.id,
+        name: person.name,
+        character: person.character ?? "",
+        profileUrl: posterUrl(person.profile_path ?? null, "w185"),
+      })) ?? [],
+    crew:
+      data.credits?.crew
+        ?.filter((person) =>
+          mediaType === "movie"
+            ? ["Director", "Writer", "Screenplay"].includes(person.job ?? "")
+            : ["Creator", "Executive Producer"].includes(person.job ?? ""),
+        )
+        .slice(0, 8)
+        .map((person) => ({
+          id: person.id,
+          name: person.name,
+          job: person.job ?? "",
+        })) ?? [],
     seasons: data.seasons?.map((season) => ({
       id: season.id,
       name: season.name,
@@ -224,7 +260,7 @@ async function tmdb<T>(path: string, params: Record<string, string>): Promise<T 
   if (!accessToken && apiKey) url.searchParams.set("api_key", apiKey);
 
   try {
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined,
       next: { revalidate: 60 * 30 },
     });
@@ -233,6 +269,18 @@ async function tmdb<T>(path: string, params: Record<string, string>): Promise<T 
   } catch {
     return null;
   }
+}
+
+async function fetchWithRetry(url: URL, init: RequestInit, attempts = 2) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await fetch(url, init);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
 }
 
 function normalizeList(
@@ -261,6 +309,25 @@ function normalizedPage(page?: string) {
   const value = Number(page);
   if (!Number.isFinite(value)) return "1";
   return String(Math.max(1, Math.floor(value)));
+}
+
+function tmdbSort(sort: string | undefined, mediaType: MediaType) {
+  if (sort === "rating") return "vote_average.desc";
+  if (sort === "new") return mediaType === "movie" ? "primary_release_date.desc" : "first_air_date.desc";
+  return "popularity.desc";
+}
+
+function genreForMediaType(genre: string | undefined, mediaType: MediaType) {
+  if (!genre) return undefined;
+  const movieGenres = new Set(["28", "12", "16", "35", "80", "99", "18", "14", "27", "9648", "10749", "878", "53"]);
+  const tvGenres = new Set(["10759", "16", "35", "80", "99", "18", "10751", "10765", "9648", "10768", "37"]);
+  if (mediaType === "movie" && movieGenres.has(genre)) return genre;
+  if (mediaType === "tv" && tvGenres.has(genre)) return genre;
+  if (mediaType === "movie" && genre === "10765") return "878";
+  if (mediaType === "tv" && genre === "878") return "10765";
+  if (mediaType === "movie" && genre === "10759") return "28";
+  if (mediaType === "tv" && (genre === "28" || genre === "12")) return "10759";
+  return undefined;
 }
 
 function normalizeItem(result: TmdbResult, forcedType?: MediaType): CatalogItem | null {

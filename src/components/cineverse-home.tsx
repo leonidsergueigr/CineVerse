@@ -22,7 +22,8 @@ import type { LucideIcon } from "lucide-react";
 import { useMemo, useState, useTransition } from "react";
 import type { ReactNode } from "react";
 import { GENRES, LANGUAGES } from "@/lib/genres";
-import type { CatalogItem, HomeCatalog, WatchProgress } from "@/lib/types";
+import type { BrowseCatalog, CatalogItem, HomeCatalog, WatchProgress } from "@/lib/types";
+import { SiteHeader } from "@/components/site-header";
 
 type Props = {
   catalog: HomeCatalog;
@@ -30,7 +31,7 @@ type Props = {
 };
 
 export function CineVerseHome({ catalog, continueWatching }: Props) {
-  const [isPending, startTransition] = useTransition();
+  const [, startTransition] = useTransition();
   const [liked, setLiked] = useState<Record<string, boolean>>({});
   const hero = catalog.hero;
   const heroBackground = hero.backdropUrl ?? hero.posterUrl;
@@ -67,18 +68,7 @@ export function CineVerseHome({ catalog, continueWatching }: Props) {
 
   return (
     <main className="min-h-screen bg-[#050505] text-white">
-      <header className="fixed inset-x-0 top-0 z-30 border-b border-white/5 bg-black/55 backdrop-blur-xl">
-        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
-          <Link href="/" className="text-2xl font-black tracking-[0.18em] text-[#e50914]">
-            CineVerse
-          </Link>
-          <nav className="hidden items-center gap-6 text-sm font-medium text-zinc-300 md:flex">
-            <a href="#films">Films</a>
-            <a href="#series">Series</a>
-            <a href="#filtres">Filtres</a>
-          </nav>
-        </div>
-      </header>
+      <SiteHeader />
 
       <section className="relative min-h-[82vh] overflow-hidden">
         {catalog.heroTrailerUrl ? (
@@ -139,83 +129,7 @@ export function CineVerseHome({ catalog, continueWatching }: Props) {
         </div>
       </section>
 
-      <section id="filtres" className="border-y border-white/10 bg-[#0b0b0b]">
-        <div className="mx-auto max-w-7xl px-4 py-5 sm:px-6 lg:px-8">
-          <form className="grid gap-3 md:grid-cols-[1.5fr_repeat(5,1fr)_auto]">
-            <label className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
-              <input
-                name="q"
-                defaultValue={catalog.filters.query}
-                placeholder="Rechercher"
-                className="h-11 w-full rounded border border-white/10 bg-white/[0.08] pl-10 pr-3 text-sm text-white outline-none transition focus:border-[#e50914]"
-              />
-            </label>
-            <select name="type" defaultValue={catalog.filters.mediaType ?? ""} className="filter-field">
-              <option value="">Tout</option>
-              <option value="movie">Films</option>
-              <option value="tv">Series</option>
-            </select>
-            <select name="genre" defaultValue={catalog.filters.genre ?? ""} className="filter-field">
-              <option value="">Genre</option>
-              {allGenres.map((genre) => (
-                <option key={genre.id} value={genre.id}>
-                  {genre.name}
-                </option>
-              ))}
-            </select>
-            <input
-              name="yearFrom"
-              defaultValue={catalog.filters.yearFrom}
-              placeholder="Depuis"
-              inputMode="numeric"
-              className="filter-field"
-            />
-            <input
-              name="yearTo"
-              defaultValue={catalog.filters.yearTo}
-              placeholder="Jusqu'a"
-              inputMode="numeric"
-              className="filter-field"
-            />
-            <select
-              name="language"
-              defaultValue={catalog.filters.language ?? ""}
-              className="filter-field"
-            >
-              <option value="">Langue</option>
-              {LANGUAGES.map((language) => (
-                <option key={language.id} value={language.id}>
-                  {language.name}
-                </option>
-              ))}
-            </select>
-            <button
-              type="submit"
-              className="inline-flex h-11 items-center justify-center gap-2 rounded bg-[#e50914] px-4 text-sm font-bold text-white transition hover:bg-[#f6121d]"
-            >
-              {isPending ? <SlidersHorizontal className="h-4 w-4 animate-pulse" /> : <Filter className="h-4 w-4" />}
-              Filtrer
-            </button>
-          </form>
-
-          <ExplorePanel activeType={catalog.filters.mediaType} />
-        </div>
-      </section>
-
       <div id="catalog" className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
-        {catalog.isFiltered ? (
-          <FilteredGrid
-            items={catalog.filteredItems}
-            liked={liked}
-            onLike={toggleLike}
-            filters={catalog.filters}
-            currentPage={catalog.filteredPage}
-            totalPages={catalog.filteredTotalPages}
-            totalResults={catalog.filteredTotalResults}
-          />
-        ) : null}
-
         {sections.map((section) => (
           <section key={section.id} id={section.id} className="mb-10">
             <h2 className="mb-4 text-xl font-bold tracking-normal">{section.title}</h2>
@@ -236,6 +150,114 @@ export function CineVerseHome({ catalog, continueWatching }: Props) {
   );
 }
 
+export function BrowseExperience({ catalog }: { catalog: BrowseCatalog }) {
+  const [isPending, startTransition] = useTransition();
+  const [liked, setLiked] = useState<Record<string, boolean>>({});
+
+  function toggleLike(item: CatalogItem) {
+    const key = `${item.mediaType}-${item.id}`;
+    const next = !liked[key];
+    setLiked((current) => ({ ...current, [key]: next }));
+    startTransition(() => {
+      fetch("/api/likes", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          tmdbId: item.id,
+          mediaType: item.mediaType,
+          title: item.title,
+          posterPath: item.posterPath,
+          backdropPath: item.backdropPath,
+          liked: next,
+        }),
+      });
+    });
+  }
+
+  return (
+    <main className="min-h-screen bg-[#050505] pt-16 text-white">
+      <SiteHeader query={catalog.filters.query} />
+      <section className="border-b border-white/10 bg-[#0b0b0b]">
+        <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+          <form action="/browse" className="grid gap-3 md:grid-cols-[1.5fr_repeat(5,1fr)_auto]">
+            <label className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+              <input
+                name="q"
+                defaultValue={catalog.filters.query}
+                placeholder="Rechercher"
+                className="h-11 w-full rounded border border-white/10 bg-white/[0.08] pl-10 pr-3 text-sm text-white outline-none transition focus:border-[#e50914]"
+              />
+            </label>
+            <select name="type" defaultValue={catalog.filters.mediaType ?? ""} className="filter-field">
+              <option value="">Tout</option>
+              <option value="movie">Films</option>
+              <option value="tv">Series</option>
+            </select>
+            <select name="genre" defaultValue={catalog.filters.genre ?? ""} className="filter-field">
+              <option value="">Genre</option>
+              {(catalog.filters.mediaType === "tv" ? seriesGenres : movieGenres).map((genre) => (
+                <option key={genre.id} value={genre.id}>
+                  {genre.name}
+                </option>
+              ))}
+            </select>
+            <input
+              name="yearFrom"
+              defaultValue={catalog.filters.yearFrom}
+              placeholder="Depuis"
+              inputMode="numeric"
+              className="filter-field"
+            />
+            <input
+              name="yearTo"
+              defaultValue={catalog.filters.yearTo}
+              placeholder="Jusqu'a"
+              inputMode="numeric"
+              className="filter-field"
+            />
+            <select
+              name="originalLanguage"
+              defaultValue={catalog.filters.originalLanguage ?? ""}
+              className="filter-field"
+            >
+              <option value="">Langue originale</option>
+              {LANGUAGES.map((language) => (
+                <option key={language.id} value={language.id}>
+                  {language.name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="submit"
+              className="inline-flex h-11 items-center justify-center gap-2 rounded bg-[#e50914] px-4 text-sm font-bold text-white transition hover:bg-[#f6121d]"
+            >
+              {isPending ? <SlidersHorizontal className="h-4 w-4 animate-pulse" /> : <Filter className="h-4 w-4" />}
+              Filtrer
+            </button>
+          </form>
+
+          {catalog.filters.mediaType === "movie" || catalog.filters.mediaType === "tv" ? (
+            <ExplorePanel activeType={catalog.filters.mediaType} />
+          ) : null}
+        </div>
+      </section>
+
+      <div id="catalog" className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
+        <FilteredGrid
+          items={catalog.items}
+          liked={liked}
+          onLike={toggleLike}
+          filters={catalog.filters}
+          currentPage={catalog.page}
+          totalPages={catalog.totalPages}
+          totalResults={catalog.totalResults}
+        />
+      </div>
+    </main>
+  );
+}
+
 function ExplorePanel({ activeType }: { activeType?: string }) {
   const mediaType = activeType === "tv" ? "tv" : "movie";
   const genres = mediaType === "tv" ? seriesGenres : movieGenres;
@@ -243,16 +265,16 @@ function ExplorePanel({ activeType }: { activeType?: string }) {
   return (
     <div className="mt-5 overflow-hidden rounded border border-white/10 bg-[#151515] shadow-2xl">
       <div className="grid grid-cols-2 border-b border-white/10 sm:grid-cols-4">
-        <ExploreTab href="/?type=movie#catalog" active={mediaType === "movie"} icon={Clapperboard}>
+        <ExploreTab href="/browse?type=movie" active={mediaType === "movie"} icon={Clapperboard}>
           Films
         </ExploreTab>
-        <ExploreTab href="/?type=tv#catalog" active={mediaType === "tv"} icon={Tv}>
+        <ExploreTab href="/browse?type=tv" active={mediaType === "tv"} icon={Tv}>
           Series
         </ExploreTab>
-        <ExploreTab href="/?type=movie&minRating=7.5#catalog" icon={Flame}>
+        <ExploreTab href="/browse?type=movie&minRating=7.5" icon={Flame}>
           Les + Notes
         </ExploreTab>
-        <ExploreTab href="/#catalog" icon={Library}>
+        <ExploreTab href="/browse" icon={Library}>
           Catalogue
         </ExploreTab>
       </div>
@@ -260,39 +282,39 @@ function ExplorePanel({ activeType }: { activeType?: string }) {
       <div className="grid gap-px bg-white/10 md:grid-cols-[1.1fr_.9fr_.9fr_.8fr]">
         <ExploreColumn title="Par genre" icon={Grid2X2}>
           {genres.map((genre) => (
-            <ExploreLink key={genre.id} href={`/?type=${mediaType}&genre=${genre.id}#catalog`}>
+            <ExploreLink key={genre.id} href={`/browse?type=${mediaType}&genre=${genre.id}`}>
               {genre.name}
             </ExploreLink>
           ))}
         </ExploreColumn>
         <ExploreColumn title="Par langue" icon={Globe2}>
-          <ExploreLink href={`/?type=${mediaType}#catalog`}>
+          <ExploreLink href={`/browse?type=${mediaType}`}>
             Tous les {mediaType === "movie" ? "films" : "series"}
           </ExploreLink>
           {LANGUAGES.map((language) => (
             <ExploreLink
               key={language.id}
-              href={`/?type=${mediaType}&language=${language.id}#catalog`}
+              href={`/browse?type=${mediaType}&originalLanguage=${language.id}`}
             >
               {language.name}
             </ExploreLink>
           ))}
         </ExploreColumn>
         <ExploreColumn title="Selections" icon={Sparkles}>
-          <ExploreLink href={`/?type=${mediaType}&minRating=8#catalog`}>Tres bien notes</ExploreLink>
-          <ExploreLink href={`/?type=${mediaType}&yearFrom=2026&yearTo=2026#catalog`}>
+          <ExploreLink href={`/browse?type=${mediaType}&minRating=8`}>Tres bien notes</ExploreLink>
+          <ExploreLink href={`/browse?type=${mediaType}&yearFrom=2026&yearTo=2026`}>
             Nouveautes 2026
           </ExploreLink>
-          <ExploreLink href={`/?type=${mediaType}&yearFrom=2025&yearTo=2025#catalog`}>
+          <ExploreLink href={`/browse?type=${mediaType}&yearFrom=2025&yearTo=2025`}>
             Sorties 2025
           </ExploreLink>
-          <ExploreLink href={`/?type=${mediaType}&genre=16#catalog`}>Animation</ExploreLink>
+          <ExploreLink href={`/browse?type=${mediaType}&genre=16`}>Animation</ExploreLink>
         </ExploreColumn>
         <ExploreColumn title="Par annee" icon={CalendarDays}>
           {[2026, 2025, 2024, 2023, 2022, 2021].map((year) => (
             <ExploreLink
               key={year}
-              href={`/?type=${mediaType}&yearFrom=${year}&yearTo=${year}#catalog`}
+              href={`/browse?type=${mediaType}&yearFrom=${year}&yearTo=${year}`}
             >
               {mediaType === "movie" ? "Films" : "Series"} {year}
             </ExploreLink>
@@ -372,18 +394,14 @@ function FilteredGrid({
   items: CatalogItem[];
   liked: Record<string, boolean>;
   onLike: (item: CatalogItem) => void;
-  filters: HomeCatalog["filters"];
+  filters: BrowseCatalog["filters"];
   currentPage: number;
   totalPages: number;
   totalResults: number;
 }) {
-  const [sort, setSort] = useState("new");
+  const sort = filters.sort ?? "new";
   const sorted = useMemo(() => sortItems(items, sort), [items, sort]);
   const pageWindow = buildPageWindow(currentPage, totalPages);
-
-  function chooseSort(value: string) {
-    setSort(value);
-  }
 
   return (
     <section className="mb-12 border border-white/10 bg-[#101010] p-3 shadow-2xl sm:p-4">
@@ -404,7 +422,9 @@ function FilteredGrid({
           <button
             key={value}
             type="button"
-            onClick={() => chooseSort(value)}
+            onClick={() => {
+              window.location.href = pageHref({ ...filters, sort: value, page: undefined }, 1);
+            }}
             className={`h-9 border text-xs font-bold transition ${
               sort === value
                 ? "border-[#ff7a1a] bg-[#e50914] text-white"
@@ -528,7 +548,7 @@ function sortItems(items: CatalogItem[], sort: string) {
   });
 }
 
-function pageHref(filters: HomeCatalog["filters"], page: number) {
+function pageHref(filters: BrowseCatalog["filters"], page: number) {
   const params = new URLSearchParams();
   if (filters.query) params.set("q", filters.query);
   if (filters.mediaType) params.set("type", filters.mediaType);
@@ -536,10 +556,13 @@ function pageHref(filters: HomeCatalog["filters"], page: number) {
   if (filters.yearFrom) params.set("yearFrom", filters.yearFrom);
   if (filters.yearTo) params.set("yearTo", filters.yearTo);
   if (filters.minRating) params.set("minRating", filters.minRating);
-  if (filters.language) params.set("language", filters.language);
+  if (filters.originalLanguage) params.set("originalLanguage", filters.originalLanguage);
+  if (filters.person) params.set("person", filters.person);
+  if (filters.personName) params.set("personName", filters.personName);
+  if (filters.sort) params.set("sort", filters.sort);
   if (page > 1) params.set("page", String(page));
   const query = params.toString();
-  return query ? `/?${query}#catalog` : "/#catalog";
+  return query ? `/browse?${query}` : "/browse";
 }
 
 function buildPageWindow(currentPage: number, totalPages: number) {
@@ -595,7 +618,3 @@ const seriesGenres = [
   { id: 10768, name: "Guerre & Politique" },
   { id: 37, name: "Western" },
 ];
-
-const allGenres = Array.from(
-  new Map([...movieGenres, ...seriesGenres].map((genre) => [genre.id, genre])).values(),
-);

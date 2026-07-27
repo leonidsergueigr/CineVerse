@@ -24,6 +24,8 @@ export type MediaDetails = CatalogItem & {
     episodeCount: number;
   }>;
   genres: Array<{ id: number; name: string }>;
+  cast: Array<{ id: number; name: string; character: string; profileUrl: string | null }>;
+  crew: Array<{ id: number; name: string; job: string }>;
 };
 
 export type CatalogSection = {
@@ -36,12 +38,14 @@ export type HomeCatalog = {
   hero: CatalogItem;
   heroTrailerUrl: string | null;
   sections: CatalogSection[];
+};
+
+export type BrowseCatalog = {
+  items: CatalogItem[];
   filters: CatalogFilters;
-  filteredItems: CatalogItem[];
-  isFiltered: boolean;
-  filteredPage: number;
-  filteredTotalPages: number;
-  filteredTotalResults: number;
+  page: number;
+  totalPages: number;
+  totalResults: number;
 };
 
 export type CatalogFilters = {
@@ -52,6 +56,10 @@ export type CatalogFilters = {
   yearTo?: string;
   minRating?: string;
   language?: string;
+  originalLanguage?: string;
+  person?: string;
+  personName?: string;
+  sort?: string;
   page?: string;
 };
 
@@ -76,4 +84,10 @@ export type EmbedProvider = {
   supportsTracking: boolean;
   supportsLanguage: boolean;
   priority: number;
+  languages?: Array<{ id: string; label: string }>;
+  customizationOptions?: {
+    autoplay?: string;
+    autonext?: string;
+    [key: string]: string | undefined;
+  };
 };

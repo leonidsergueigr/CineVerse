@@ -98,14 +98,28 @@ export function fallbackCatalog() {
 }
 
 export function fallbackDetails(mediaType: string, id: number): MediaDetails {
-  const item =
-    fallbackItems.find((entry) => entry.id === id && entry.mediaType === mediaType) ??
-    fallbackItems[0];
+  const item = fallbackItems.find((entry) => entry.id === id && entry.mediaType === mediaType) ?? {
+    id,
+    mediaType: mediaType === "tv" ? "tv" : "movie",
+    title: mediaType === "tv" ? "Serie indisponible" : "Film indisponible",
+    overview:
+      "Les metadonnees TMDB ne sont pas disponibles pour ce contenu pour le moment.",
+    posterPath: null,
+    backdropPath: null,
+    posterUrl: null,
+    backdropUrl: null,
+    releaseDate: null,
+    voteAverage: 0,
+    genreIds: [],
+    originalLanguage: "na",
+  };
 
   return {
     ...item,
     runtime: item.mediaType === "movie" ? 136 : null,
     genres: item.genreIds.map((genreId) => ({ id: genreId, name: String(genreId) })),
+    cast: [],
+    crew: [],
     seasons:
       item.mediaType === "tv"
         ? [

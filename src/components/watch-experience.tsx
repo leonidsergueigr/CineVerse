@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowLeft, Heart, Languages, Play, Server, Star } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { buildEmbedUrl } from "@/lib/providers";
+import { ArrowLeft, Heart, Languages, Play, Server, Star, ToggleRight } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { buildEmbedUrl, getProviderLanguages } from "@/lib/providers";
+import { SiteHeader } from "@/components/site-header";
 import type { EmbedProvider, MediaDetails, WatchProgress } from "@/lib/types";
 
 type Props = {
@@ -22,26 +23,64 @@ export function WatchExperience({
   initialEpisode,
 }: Props) {
   const [providerId, setProviderId] = useState(providers[0]?.id ?? "");
-  const [language, setLanguage] = useState("vostfr");
+  const [language, setLanguage] = useState("vf");
   const [season, setSeason] = useState(initialSeason ?? 1);
   const [episode, setEpisode] = useState(initialEpisode ?? 1);
   const [started, setStarted] = useState(false);
+  const [autoNext, setAutoNext] = useState(true);
   const [progress, setProgress] = useState({
     currentTime: initialProgress?.progressSeconds ?? 0,
     duration: initialProgress?.durationSeconds ?? 0,
   });
   const [, startTransition] = useTransition();
   const lastSaveRef = useRef(0);
+  const autoAdvancedRef = useRef("");
 
   const provider = providers.find((item) => item.id === providerId) ?? providers[0];
+  const languageOptions = useMemo(() => getProviderLanguages(provider), [provider]);
+  const defaultLanguage = languageOptions.find((option) => option.id === "vf")?.id ?? languageOptions[0]?.id ?? "vo";
+  const activeLanguage = languageOptions.some((option) => option.id === language)
+    ? language
+    : defaultLanguage;
   const iframeUrl = useMemo(() => {
     if (!provider) return "";
     return buildEmbedUrl(provider, detail, {
-      language,
+      language: activeLanguage,
       seasonNumber: season,
       episodeNumber: episode,
+      autoplay: started,
+      autoNext,
     });
-  }, [detail, episode, language, provider, season]);
+  }, [activeLanguage, autoNext, detail, episode, provider, season, started]);
+
+  const maybeAutoAdvance = useCallback(
+    (currentTime: number, duration: number) => {
+      if (!autoNext || detail.mediaType !== "tv" || duration <= 0) return;
+      if (currentTime / duration < 0.98) return;
+
+      const key = `${season}-${episode}`;
+      if (autoAdvancedRef.current === key) return;
+      autoAdvancedRef.current = key;
+
+      const currentSeason = detail.seasons?.find((item) => item.seasonNumber === season);
+      const nextEpisode = episode + 1;
+      if (currentSeason && nextEpisode <= currentSeason.episodeCount) {
+        setEpisode(nextEpisode);
+        setProgress({ currentTime: 0, duration: 0 });
+        return;
+      }
+
+      const nextSeason = detail.seasons?.find(
+        (item) => item.seasonNumber > season && item.episodeCount > 0,
+      );
+      if (nextSeason) {
+        setSeason(nextSeason.seasonNumber);
+        setEpisode(1);
+        setProgress({ currentTime: 0, duration: 0 });
+      }
+    },
+    [autoNext, detail.mediaType, detail.seasons, episode, season],
+  );
 
   useEffect(() => {
     function onMessage(event: MessageEvent) {
@@ -53,6 +92,7 @@ export function WatchExperience({
       if (!Number.isFinite(currentTime) || !Number.isFinite(duration)) return;
 
       setProgress({ currentTime, duration });
+      maybeAutoAdvance(currentTime, duration);
       const now = Date.now();
       if (now - lastSaveRef.current < 9000) return;
       lastSaveRef.current = now;
@@ -76,7 +116,7 @@ export function WatchExperience({
 
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [detail, episode, season]);
+  }, [detail, episode, maybeAutoAdvance, season]);
 
   function like() {
     startTransition(() => {
@@ -119,10 +159,11 @@ export function WatchExperience({
   const percent = progress.duration ? Math.min(100, (progress.currentTime / progress.duration) * 100) : 0;
 
   return (
-    <main className="min-h-screen bg-[#050505] text-white">
+    <main className="min-h-screen bg-[#050505] pt-16 text-white">
+      <SiteHeader fixed />
       <div className="relative">
         <div className="absolute inset-x-0 top-0 z-20 bg-gradient-to-b from-black to-transparent">
-          <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
+          <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
             <Link
               href="/"
               className="inline-flex h-10 w-10 items-center justify-center rounded bg-black/50 ring-1 ring-white/10 transition hover:bg-white hover:text-black"
@@ -130,11 +171,10 @@ export function WatchExperience({
             >
               <ArrowLeft className="h-5 w-5" />
             </Link>
-            <span className="text-xl font-black tracking-[0.18em] text-[#e50914]">CineVerse</span>
           </div>
         </div>
 
-        <section className="grid min-h-screen grid-rows-[minmax(55vh,1fr)_auto]">
+        <section className="grid min-h-[calc(100vh-4rem)] grid-rows-[minmax(52vh,1fr)_auto]">
           <div className="relative bg-black">
             {started && iframeUrl ? (
               <iframe
@@ -178,7 +218,19 @@ export function WatchExperience({
           </div>
 
           <div className="border-t border-white/10 bg-[#0b0b0b]">
-            <div className="mx-auto grid max-w-7xl gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[1fr_380px] lg:px-8">
+            <div className="mx-auto grid max-w-7xl gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[180px_1fr_380px] lg:px-8">
+              <aside className="hidden lg:block">
+                {detail.posterUrl ? (
+                  <img
+                    src={detail.posterUrl}
+                    alt={detail.title}
+                    className="aspect-[2/3] w-full rounded object-cover shadow-2xl ring-1 ring-white/10"
+                  />
+                ) : (
+                  <div className="poster-fallback aspect-[2/3] rounded ring-1 ring-white/10" />
+                )}
+              </aside>
+
               <section>
                 <div className="mb-3 flex flex-wrap items-center gap-3 text-sm text-zinc-300">
                   <span>{detail.mediaType === "movie" ? "Film" : "Serie"}</span>
@@ -194,14 +246,66 @@ export function WatchExperience({
                 </p>
                 <div className="mt-5 flex flex-wrap gap-2">
                   {detail.genres.map((genre) => (
-                    <span key={genre.id} className="rounded bg-white/10 px-3 py-1 text-xs text-zinc-200">
+                    <Link
+                      key={genre.id}
+                      href={`/browse?type=${detail.mediaType}&genre=${genre.id}`}
+                      className="rounded bg-white/10 px-3 py-1 text-xs text-zinc-200 transition hover:bg-[#e50914] hover:text-white"
+                    >
                       {genre.name}
-                    </span>
+                    </Link>
                   ))}
                 </div>
+                {detail.cast.length ? (
+                  <div className="mt-6">
+                    <h2 className="mb-3 text-sm font-black uppercase tracking-[0.12em] text-zinc-400">
+                      Casting
+                    </h2>
+                    <div className="scrollbar-none grid auto-cols-[92px] grid-flow-col gap-3 overflow-x-auto">
+                      {detail.cast.map((person) => (
+                        <Link
+                          key={person.id}
+                          href={`/browse?type=${detail.mediaType}&person=${person.id}&personName=${encodeURIComponent(person.name)}`}
+                          className="group"
+                        >
+                          <div className="aspect-[3/4] overflow-hidden rounded bg-zinc-900 ring-1 ring-white/10">
+                            {person.profileUrl ? (
+                              <img
+                                src={person.profileUrl}
+                                alt={person.name}
+                                className="h-full w-full object-cover transition group-hover:scale-105"
+                                loading="lazy"
+                              />
+                            ) : (
+                              <div className="grid h-full place-items-center px-2 text-center text-xs text-zinc-400">
+                                {person.name}
+                              </div>
+                            )}
+                          </div>
+                          <p className="mt-2 line-clamp-2 text-xs font-bold text-zinc-100">{person.name}</p>
+                        </Link>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </section>
 
               <aside className="grid gap-3 rounded bg-zinc-950 p-4 ring-1 ring-white/10">
+                <div className="grid grid-cols-2 gap-2">
+                  {providers.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => setProviderId(item.id)}
+                      className={`h-9 rounded border px-3 text-xs font-bold transition ${
+                        providerId === item.id
+                          ? "border-[#e50914] bg-[#e50914] text-white"
+                          : "border-white/10 bg-white/[0.06] text-zinc-300 hover:text-white"
+                      }`}
+                    >
+                      {item.name}
+                    </button>
+                  ))}
+                </div>
                 <div className="grid grid-cols-[auto_1fr] items-center gap-3">
                   <Server className="h-4 w-4 text-zinc-400" />
                   <select
@@ -219,13 +323,15 @@ export function WatchExperience({
                 <div className="grid grid-cols-[auto_1fr] items-center gap-3">
                   <Languages className="h-4 w-4 text-zinc-400" />
                   <select
-                    value={language}
+                    value={activeLanguage}
                     onChange={(event) => setLanguage(event.target.value)}
                     className="control-field w-full"
                   >
-                    <option value="vostfr">VOSTFR</option>
-                    <option value="vf">VF</option>
-                    <option value="vo">VO</option>
+                    {languageOptions.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
                   </select>
                 </div>
                 {detail.mediaType === "tv" ? (
@@ -249,6 +355,20 @@ export function WatchExperience({
                       className="control-field w-full"
                     />
                   </div>
+                ) : null}
+                {detail.mediaType === "tv" ? (
+                  <label className="flex h-10 items-center justify-between rounded bg-white/[0.06] px-3 text-sm text-zinc-200 ring-1 ring-white/10">
+                    <span className="inline-flex items-center gap-2">
+                      <ToggleRight className="h-4 w-4 text-[#ff7a1a]" />
+                      Episode suivant
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={autoNext}
+                      onChange={(event) => setAutoNext(event.target.checked)}
+                      className="h-4 w-4 accent-[#e50914]"
+                    />
+                  </label>
                 ) : null}
                 <button
                   type="button"
