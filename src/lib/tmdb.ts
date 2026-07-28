@@ -327,7 +327,7 @@ export async function getTrailerUrl(mediaType: MediaType, id: number) {
     videos.find((video) => video.site === "YouTube");
 
   if (!trailer) return null;
-  return `https://www.youtube-nocookie.com/embed/${trailer.key}?autoplay=1&mute=1&controls=0&disablekb=1&fs=0&iv_load_policy=3&cc_load_policy=0&loop=1&playlist=${trailer.key}&playsinline=1&rel=0`;
+  return `https://www.youtube-nocookie.com/embed/${trailer.key}`;
 }
 
 export function posterUrl(path: string | null, size = "w342") {

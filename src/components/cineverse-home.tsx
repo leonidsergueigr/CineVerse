@@ -25,6 +25,43 @@ type HomeSection = CatalogSection & {
   personalized?: boolean;
 };
 
+type YouTubePlayer = {
+  destroy: () => void;
+  mute: () => void;
+  playVideo: () => void;
+  seekTo: (seconds: number, allowSeekAhead: boolean) => void;
+};
+
+type YouTubeNamespace = {
+  Player: new (
+    element: HTMLElement,
+    options: {
+      videoId: string;
+      host: string;
+      width: string;
+      height: string;
+      playerVars: Record<string, string | number>;
+      events: {
+        onReady: (event: { target: YouTubePlayer }) => void;
+        onStateChange: (event: { data: number; target: YouTubePlayer }) => void;
+      };
+    },
+  ) => YouTubePlayer;
+  PlayerState: {
+    ENDED: number;
+    PLAYING: number;
+  };
+};
+
+declare global {
+  interface Window {
+    YT?: YouTubeNamespace;
+    onYouTubeIframeAPIReady?: () => void;
+  }
+}
+
+let youtubeApiPromise: Promise<YouTubeNamespace> | null = null;
+
 export function CineVerseHome({
   catalog,
   continueWatching,
@@ -37,18 +74,8 @@ export function CineVerseHome({
   );
   const [recommendations, setRecommendations] = useState(initialRecommendations);
   const [recommendationsLoading, setRecommendationsLoading] = useState(false);
-  const [trailerVisible, setTrailerVisible] = useState(false);
-  const trailerRevealTimer = useRef<number | null>(null);
   const hero = catalog.hero;
   const heroBackground = hero.backdropUrl ?? hero.posterUrl;
-
-  useEffect(() => {
-    return () => {
-      if (trailerRevealTimer.current) {
-        window.clearTimeout(trailerRevealTimer.current);
-      }
-    };
-  }, []);
 
   const sections = useMemo(() => {
     const result: HomeSection[] = [
@@ -110,15 +137,6 @@ export function CineVerseHome({
     }
   }
 
-  function revealTrailer() {
-    if (trailerRevealTimer.current) {
-      window.clearTimeout(trailerRevealTimer.current);
-    }
-    trailerRevealTimer.current = window.setTimeout(() => {
-      setTrailerVisible(true);
-    }, 3200);
-  }
-
   return (
     <main className="min-h-screen bg-[#050505] text-white">
       <SiteHeader />
@@ -134,16 +152,9 @@ export function CineVerseHome({
           <div className="poster-fallback absolute inset-0" />
         )}
         {catalog.heroTrailerUrl ? (
-          <iframe
-            src={catalog.heroTrailerUrl}
-            title={`Trailer ${hero.title}`}
-            allow="autoplay; encrypted-media; picture-in-picture"
-            tabIndex={-1}
-            aria-hidden="true"
-            onLoad={revealTrailer}
-            className={`pointer-events-none absolute inset-0 h-full w-full scale-125 border-0 transition-opacity duration-1000 ${
-              trailerVisible ? "opacity-90" : "opacity-0"
-            }`}
+          <HeroTrailer
+            url={catalog.heroTrailerUrl}
+            title={hero.title}
           />
         ) : null}
         <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(5,5,5,.94)_0%,rgba(5,5,5,.62)_34%,rgba(5,5,5,.1)_72%),linear-gradient(0deg,#050505_0%,rgba(5,5,5,.04)_38%,rgba(5,5,5,.34)_100%)]" />
@@ -231,6 +242,87 @@ export function CineVerseHome({
   );
 }
 
+function HeroTrailer({ url, title }: { url: string; title: string }) {
+  const mountRef = useRef<HTMLDivElement>(null);
+  const playerRef = useRef<YouTubePlayer | null>(null);
+  const revealTimer = useRef<number | null>(null);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    const videoId = youtubeVideoId(url);
+    if (!videoId || !mountRef.current) return;
+
+    let cancelled = false;
+    void loadYouTubeApi()
+      .then((youtube) => {
+        if (cancelled || !mountRef.current) return;
+
+        playerRef.current = new youtube.Player(mountRef.current, {
+          videoId,
+          host: "https://www.youtube-nocookie.com",
+          width: "100%",
+          height: "100%",
+          playerVars: {
+            autoplay: 1,
+            mute: 1,
+            controls: 0,
+            disablekb: 1,
+            fs: 0,
+            iv_load_policy: 3,
+            cc_load_policy: 0,
+            playsinline: 1,
+            rel: 0,
+            origin: window.location.origin,
+          },
+          events: {
+            onReady: (event) => {
+              event.target.mute();
+              event.target.playVideo();
+            },
+            onStateChange: (event) => {
+              if (event.data === youtube.PlayerState.PLAYING) {
+                if (revealTimer.current) {
+                  window.clearTimeout(revealTimer.current);
+                }
+                revealTimer.current = window.setTimeout(() => {
+                  if (!cancelled) setVisible(true);
+                }, 3200);
+              }
+
+              if (event.data === youtube.PlayerState.ENDED) {
+                setVisible(false);
+                event.target.seekTo(0, true);
+                event.target.playVideo();
+              }
+            },
+          },
+        });
+      })
+      .catch(() => setVisible(false));
+
+    return () => {
+      cancelled = true;
+      if (revealTimer.current) window.clearTimeout(revealTimer.current);
+      playerRef.current?.destroy();
+      playerRef.current = null;
+    };
+  }, [url]);
+
+  return (
+    <div
+      aria-label={`Trailer ${title}`}
+      className={`pointer-events-none absolute inset-0 h-full w-full scale-125 transition-opacity duration-1000 ${
+        visible ? "opacity-90" : "opacity-0"
+      }`}
+    >
+      <div
+        ref={mountRef}
+        className="h-full w-full [&>iframe]:h-full [&>iframe]:w-full [&>iframe]:border-0"
+      />
+    </div>
+  );
+}
+
 export function BrowseExperience({
   catalog,
   initialLikedKeys = [],
@@ -281,6 +373,52 @@ export function BrowseExperience({
       </div>
     </main>
   );
+}
+
+function loadYouTubeApi() {
+  if (window.YT?.Player) return Promise.resolve(window.YT);
+  if (youtubeApiPromise) return youtubeApiPromise;
+
+  youtubeApiPromise = new Promise<YouTubeNamespace>((resolve, reject) => {
+    const previousReady = window.onYouTubeIframeAPIReady;
+    const timeout = window.setTimeout(() => {
+      youtubeApiPromise = null;
+      reject(new Error("YouTube API timeout"));
+    }, 12000);
+
+    window.onYouTubeIframeAPIReady = () => {
+      previousReady?.();
+      window.clearTimeout(timeout);
+      if (window.YT?.Player) resolve(window.YT);
+      else reject(new Error("YouTube API unavailable"));
+    };
+
+    const existing = document.querySelector<HTMLScriptElement>(
+      'script[data-cineverse-youtube="true"]',
+    );
+    if (existing) return;
+
+    const script = document.createElement("script");
+    script.src = "https://www.youtube.com/iframe_api";
+    script.async = true;
+    script.dataset.cineverseYoutube = "true";
+    script.onerror = () => {
+      window.clearTimeout(timeout);
+      youtubeApiPromise = null;
+      reject(new Error("YouTube API failed to load"));
+    };
+    document.head.appendChild(script);
+  });
+
+  return youtubeApiPromise;
+}
+
+function youtubeVideoId(url: string) {
+  try {
+    return new URL(url).pathname.split("/").filter(Boolean).at(-1) ?? "";
+  } catch {
+    return "";
+  }
 }
 
 function ActiveFilters({ filters }: { filters: CatalogFilters }) {
