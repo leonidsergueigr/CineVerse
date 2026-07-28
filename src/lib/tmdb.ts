@@ -1,4 +1,5 @@
 import { fallbackCatalog, fallbackDetails } from "@/lib/fallback-data";
+import { load } from "cheerio";
 import dns from "node:dns";
 import { getCachedApiResponse, setCachedApiResponse } from "@/lib/store";
 import type {
@@ -92,8 +93,17 @@ type TmdbDetails = TmdbResult & {
   }>;
 };
 
+type SourceCatalogItem = {
+  title: string;
+  overview: string;
+  posterPath: string | null;
+};
+
 export async function getHomeCatalog(): Promise<HomeCatalog> {
-  const [trendingMovies, trendingTv, anime, mood] = await Promise.all([
+  const [newMovies, newTv, trendingMovies, trendingTv, anime, mood] =
+    await Promise.all([
+    getNewCatalogWithMeta("movie", "1").then((catalog) => catalog.items),
+    getNewCatalogWithMeta("tv", "1").then((catalog) => catalog.items),
     getTrending("movie"),
     getTrending("tv"),
     discover({
@@ -109,9 +119,11 @@ export async function getHomeCatalog(): Promise<HomeCatalog> {
       },
       true,
     ),
-  ]);
+    ]);
 
   const sections = [
+    { id: "new-movies", title: "Nouveautes Films", items: newMovies },
+    { id: "new-series", title: "Nouveautes Series", items: newTv },
     { id: "movies", title: "Films tendance", items: trendingMovies },
     {
       id: "series",
@@ -121,20 +133,37 @@ export async function getHomeCatalog(): Promise<HomeCatalog> {
     { id: "anime", title: "Animes du moment", items: anime },
     { id: "mood", title: "Soiree science-fiction", items: mood },
   ];
-  const hero = trendingMovies[0] ?? fallbackCatalog()[0];
+  const heroCandidates = uniqueCatalogItems([
+    ...newMovies,
+    ...trendingMovies,
+    ...newTv,
+    ...trendingTv,
+  ]).filter((item) => Boolean(item.backdropUrl) && item.voteCount > 0);
+  const rotationSlot = Math.floor(Date.now() / (15 * 60 * 1000));
+  const hero =
+    heroCandidates[rotationSlot % Math.max(1, heroCandidates.length)] ??
+    trendingMovies[0] ??
+    fallbackCatalog()[0];
   const heroTrailerUrl = await getTrailerUrl(hero.mediaType, hero.id);
 
   return {
     hero,
+    heroCandidates,
     heroTrailerUrl,
     sections,
   };
 }
 
 export async function getBrowseCatalog(filters: CatalogFilters): Promise<BrowseCatalog> {
-  const result = filters.query
-    ? await searchWithMeta(filters.query, filters.mediaType, filters.page)
-    : await discoverWithMeta(filters);
+  const result =
+    filters.catalog === "new" && !filters.query
+      ? await getNewCatalogWithMeta(
+          filters.mediaType === "tv" ? "tv" : "movie",
+          filters.page,
+        )
+      : filters.query
+        ? await searchWithMeta(filters.query, filters.mediaType, filters.page)
+        : await discoverWithMeta(filters);
 
   return {
     ...result,
@@ -169,6 +198,7 @@ export async function discoverWithMeta(filters: CatalogFilters, withFallback = f
   }
 
   const isAnime = filters.catalog === "anime";
+  const isNew = filters.catalog === "new";
   const mediaType = isAnime || filters.mediaType === "tv" ? "tv" : "movie";
   if (filters.person) {
     return getPersonCreditsWithMeta(filters, mediaType);
@@ -195,11 +225,23 @@ export async function discoverWithMeta(filters: CatalogFilters, withFallback = f
   if (filters.sort === "rating") params["vote_count.gte"] = "80";
 
   if (mediaType === "movie") {
-    if (filters.yearFrom) params["primary_release_date.gte"] = `${filters.yearFrom}-01-01`;
-    if (filters.yearTo) params["primary_release_date.lte"] = `${filters.yearTo}-12-31`;
+    if (isNew) {
+      params["primary_release_date.gte"] = oneYearAgo();
+      params["primary_release_date.lte"] = today();
+      params["vote_count.gte"] = "2";
+    } else {
+      if (filters.yearFrom) params["primary_release_date.gte"] = `${filters.yearFrom}-01-01`;
+      if (filters.yearTo) params["primary_release_date.lte"] = `${filters.yearTo}-12-31`;
+    }
   } else {
-    if (filters.yearFrom) params["first_air_date.gte"] = `${filters.yearFrom}-01-01`;
-    if (filters.yearTo) params["first_air_date.lte"] = `${filters.yearTo}-12-31`;
+    if (isNew) {
+      params["first_air_date.gte"] = oneYearAgo();
+      params["first_air_date.lte"] = today();
+      params["vote_count.gte"] = "2";
+    } else {
+      if (filters.yearFrom) params["first_air_date.gte"] = `${filters.yearFrom}-01-01`;
+      if (filters.yearTo) params["first_air_date.lte"] = `${filters.yearTo}-12-31`;
+    }
   }
 
   const data = await tmdb<TmdbList>(`/discover/${mediaType}`, params);
@@ -328,6 +370,148 @@ export async function getTrailerUrl(mediaType: MediaType, id: number) {
 
   if (!trailer) return null;
   return `https://www.youtube-nocookie.com/embed/${trailer.key}`;
+}
+
+async function getNewCatalogWithMeta(mediaType: MediaType, page?: string) {
+  const sourceCatalog = await getFs16Catalog(mediaType, page);
+  if (sourceCatalog.items.length) return sourceCatalog;
+
+  return discoverWithMeta({
+    catalog: "new",
+    mediaType,
+    sort: "new",
+    page,
+  });
+}
+
+async function getFs16Catalog(mediaType: MediaType, page?: string) {
+  const requestedPage = Number(normalizedPage(page));
+  const html = await fetchFs16Page(mediaType, requestedPage);
+  if (!html) return emptyMeta();
+
+  const { items: sourceItems, totalPages } = parseFs16Catalog(html, mediaType);
+  const resolved: Array<CatalogItem | null> = [];
+  for (let index = 0; index < sourceItems.length; index += 6) {
+    const batch = sourceItems.slice(index, index + 6);
+    resolved.push(
+      ...(await Promise.all(
+        batch.map((item) => resolveSourceCatalogItem(item, mediaType)),
+      )),
+    );
+  }
+
+  const items = uniqueCatalogItems(
+    resolved.filter((item): item is CatalogItem => Boolean(item)),
+  );
+  const safeTotalPages = Math.max(1, totalPages);
+  return {
+    items,
+    page: Math.min(requestedPage, safeTotalPages),
+    totalPages: safeTotalPages,
+    totalResults: safeTotalPages * Math.max(1, sourceItems.length),
+  };
+}
+
+async function fetchFs16Page(mediaType: MediaType, page: number) {
+  const baseUrl = process.env.FS16_BASE_URL ?? "https://fs16.lol";
+  const category = mediaType === "movie" ? "films" : "s-tv";
+  const path =
+    page <= 1
+      ? mediaType === "movie"
+        ? "/films/"
+        : "/s-tv/"
+      : `/index.php?cstart=${page}&do=cat&category=${category}`;
+  const url = new URL(path, baseUrl);
+  const cacheKey = `source:fs16:${mediaType}:${page}`;
+  const cached = getCachedApiResponse<string>(cacheKey);
+  if (cached && !cached.stale) return cached.value;
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Accept: "text/html",
+        "User-Agent": "CineVerse/1.0",
+      },
+      signal: AbortSignal.timeout(10000),
+      cache: "no-store",
+    });
+    if (!response.ok) return cached?.value ?? null;
+    const html = await response.text();
+    setCachedApiResponse(cacheKey, html, 30 * 60);
+    return html;
+  } catch {
+    return cached?.value ?? null;
+  }
+}
+
+function parseFs16Catalog(html: string, mediaType: MediaType) {
+  const $ = load(html);
+  const items: SourceCatalogItem[] = [];
+  const seen = new Set<string>();
+
+  $(".short").each((_, element) => {
+    const card = $(element);
+    if (mediaType === "tv" && !card.find(".mli-eps").length) return;
+
+    const rawTitle = card.find(".short-title").first().text().trim();
+    const title =
+      mediaType === "tv"
+        ? rawTitle.replace(/\s*-\s*Saison\s+\d+.*$/i, "").trim()
+        : rawTitle;
+    const posterPath = tmdbImagePath(
+      card.find(".short-poster img").first().attr("src") ?? "",
+    );
+    const key = `${normalizeTitle(title)}:${posterPath ?? ""}`;
+    if (!title || seen.has(key)) return;
+    seen.add(key);
+
+    items.push({
+      title,
+      posterPath,
+      overview: card.find('[id^="desc-"]').first().text().trim(),
+    });
+  });
+
+  const pageNumbers = $(".pagi-nav .navigation a")
+    .map((_, element) => {
+      const href = $(element).attr("href") ?? "";
+      const match = href.match(/[?&]cstart=(\d+)/);
+      return match ? Number(match[1]) : 0;
+    })
+    .get()
+    .filter(Number.isFinite);
+
+  return {
+    items,
+    totalPages: Math.max(1, ...pageNumbers),
+  };
+}
+
+async function resolveSourceCatalogItem(
+  source: SourceCatalogItem,
+  mediaType: MediaType,
+) {
+  const data = await tmdb<TmdbList>(`/search/${mediaType}`, {
+    query: source.title,
+    include_adult: "false",
+  });
+  const results = data?.results ?? [];
+  const posterMatch = source.posterPath
+    ? results.find((item) => item.poster_path === source.posterPath)
+    : undefined;
+  const normalizedSourceTitle = normalizeTitle(source.title);
+  const titleMatch = results.find(
+    (item) =>
+      normalizeTitle(item.title ?? item.name ?? "") === normalizedSourceTitle,
+  );
+  const match =
+    posterMatch ?? titleMatch ?? (results.length === 1 ? results[0] : undefined);
+  if (!match) return null;
+
+  const item = normalizeItem(match, mediaType);
+  return item && !item.overview && source.overview
+    ? { ...item, overview: source.overview }
+    : item;
 }
 
 export function posterUrl(path: string | null, size = "w342") {
@@ -527,7 +711,8 @@ function tmdbCacheKey(path: string, params: Record<string, string>) {
 
 function tmdbCacheTtl(path: string) {
   if (path.startsWith("/trending/")) return 60 * 60;
-  if (path.startsWith("/discover/") || path.startsWith("/search/")) return 6 * 60 * 60;
+  if (path.startsWith("/search/")) return 24 * 60 * 60;
+  if (path.startsWith("/discover/")) return 6 * 60 * 60;
   if (path.endsWith("/videos")) return 24 * 60 * 60;
   if (path.includes("/recommendations") || path.endsWith("/similar")) {
     return 12 * 60 * 60;
@@ -600,6 +785,40 @@ function uniqueCrew(crew: MediaDetails["crew"]) {
     seen.add(key);
     return true;
   });
+}
+
+function uniqueCatalogItems(items: CatalogItem[]) {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = `${item.mediaType}-${item.id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function today() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function oneYearAgo() {
+  const date = new Date();
+  date.setUTCFullYear(date.getUTCFullYear() - 1);
+  return date.toISOString().slice(0, 10);
+}
+
+function tmdbImagePath(url: string) {
+  const match = url.match(/\/t\/p\/[^/]+(\/[^?#]+)/);
+  return match?.[1] ?? null;
+}
+
+function normalizeTitle(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("fr")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
 }
 
 function isYoutubeTrailer(video: TmdbVideo) {

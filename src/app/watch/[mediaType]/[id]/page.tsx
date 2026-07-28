@@ -5,7 +5,7 @@ import {
   resolveProvidersForMedia,
 } from "@/lib/provider-availability";
 import { getEmbedProviders } from "@/lib/providers";
-import { getProgress, hasLike } from "@/lib/store";
+import { getProgress, hasDislike, hasLike } from "@/lib/store";
 import { getDetails } from "@/lib/tmdb";
 import type { MediaType } from "@/lib/types";
 
@@ -53,6 +53,7 @@ export default async function WatchPage({ params, searchParams }: PageProps) {
       providers={providerResolution.providers}
       initialProgress={progress}
       initialLiked={hasLike(id, mediaType)}
+      initialDisliked={hasDislike(id, mediaType)}
       initialSeason={season}
       initialEpisode={episode}
     />

@@ -38,11 +38,11 @@ export function SiteHeader({ query, fixed = true }: Props) {
       ref={headerRef}
       className={`${fixed ? "fixed" : "sticky"} inset-x-0 top-0 z-30 border-b border-white/10 bg-[#070707]/95 backdrop-blur-xl`}
     >
-      <div className="mx-auto grid h-16 max-w-7xl grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-5 px-4 sm:px-6 lg:gap-10 lg:px-8">
+      <div className="mx-auto grid h-16 max-w-7xl grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 px-4 sm:gap-5 sm:px-6 lg:gap-10 lg:px-8">
         <Link
           href="/"
           onClick={() => setOpenMenu(null)}
-          className="text-xl font-black tracking-[0.16em] text-[#e50914] sm:text-2xl"
+          className="text-lg font-black tracking-[0.16em] text-[#e50914] sm:text-2xl"
         >
           CineVerse
         </Link>
@@ -57,7 +57,7 @@ export function SiteHeader({ query, fixed = true }: Props) {
           />
         </form>
 
-        <nav className="flex h-full items-center gap-1 text-sm font-medium text-zinc-300">
+        <nav className="flex h-full items-center gap-0.5 text-xs font-medium text-zinc-300 sm:gap-1 sm:text-sm">
           <NavMenuButton
             label="Films"
             open={openMenu === "movie"}
@@ -99,14 +99,16 @@ function NavMenuButton({
       type="button"
       onClick={onClick}
       aria-expanded={open}
-      className={`inline-flex h-full items-center gap-1.5 border-b-2 px-3 transition ${
+      className={`inline-flex h-full items-center gap-1.5 border-b-2 px-1.5 transition sm:px-3 ${
         open
           ? "border-[#e50914] text-white"
           : "border-transparent text-zinc-300 hover:text-white"
       }`}
     >
       {label}
-      <ChevronDown className={`h-4 w-4 transition ${open ? "rotate-180" : ""}`} />
+      <ChevronDown
+        className={`hidden h-4 w-4 transition sm:block ${open ? "rotate-180" : ""}`}
+      />
     </button>
   );
 }
@@ -195,6 +197,14 @@ function BrowseMenu({
           )}
 
           <MenuColumn title="Selections">
+            {!isAnime ? (
+              <MenuLink
+                href={menuHref(menu, { catalog: "new", sort: "new" })}
+                onNavigate={onNavigate}
+              >
+                Nouveautes {isMovie ? "Films" : "Series"}
+              </MenuLink>
+            ) : null}
             <MenuLink
               href={menuHref(menu, { minRating: "8", sort: "rating" })}
               onNavigate={onNavigate}

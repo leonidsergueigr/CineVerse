@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 import { buildPersonalizedRecommendations } from "@/lib/recommendations";
-import { getLikes } from "@/lib/store";
+import { getDislikes, getLikes } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const result = await buildPersonalizedRecommendations(getLikes());
+  const result = await buildPersonalizedRecommendations(getLikes(), getDislikes());
   return NextResponse.json(result, {
     headers: { "Cache-Control": "no-store" },
   });

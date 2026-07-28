@@ -8,6 +8,7 @@ import {
 } from "@/lib/tmdb";
 import type {
   CatalogItem,
+  DislikeRecord,
   LikeRecord,
   MediaType,
   PersonalizedRecommendation,
@@ -15,6 +16,7 @@ import type {
 } from "@/lib/types";
 
 const MAX_SEEDS = 8;
+const MAX_NEGATIVE_SIGNALS = 16;
 const MAX_RESULTS = 18;
 
 type Candidate = {
@@ -27,10 +29,13 @@ type Candidate = {
 
 export async function buildPersonalizedRecommendations(
   likes: LikeRecord[],
+  dislikes: DislikeRecord[] = [],
 ): Promise<RecommendationResult> {
   const seeds = likes.slice(0, MAX_SEEDS);
+  const negativeSignals = dislikes.slice(0, MAX_NEGATIVE_SIGNALS);
   const emptyProfile = {
     likeCount: likes.length,
+    dislikeCount: dislikes.length,
     movieCount: likes.filter((like) => like.mediaType === "movie").length,
     seriesCount: likes.filter((like) => like.mediaType === "tv").length,
     topGenres: [],
@@ -49,6 +54,11 @@ export async function buildPersonalizedRecommendations(
     tv: new Map<number, number>(),
   } satisfies Record<MediaType, Map<number, number>>;
   const languageWeights = new Map<string, number>();
+  const genrePenalties = {
+    movie: new Map<number, number>(),
+    tv: new Map<number, number>(),
+  } satisfies Record<MediaType, Map<number, number>>;
+  const languagePenalties = new Map<string, number>();
 
   seedItems.forEach((item, index) => {
     if (!item) return;
@@ -59,6 +69,21 @@ export async function buildPersonalizedRecommendations(
       item.genreIds.forEach((genreId) => {
         const mappedGenre = mapGenre(genreId, item.mediaType, targetType);
         if (mappedGenre) addWeight(genreWeights[targetType], mappedGenre, recencyWeight);
+      });
+    });
+  });
+
+  negativeSignals.forEach((item, index) => {
+    const recencyWeight = Math.max(0.5, 0.9 - index * 0.035);
+    if (item.originalLanguage) {
+      addWeight(languagePenalties, item.originalLanguage, recencyWeight);
+    }
+    (["movie", "tv"] as const).forEach((targetType) => {
+      item.genreIds.forEach((genreId) => {
+        const mappedGenre = mapGenre(genreId, item.mediaType, targetType);
+        if (mappedGenre) {
+          addWeight(genrePenalties[targetType], mappedGenre, recencyWeight);
+        }
       });
     });
   });
@@ -83,11 +108,22 @@ export async function buildPersonalizedRecommendations(
     mergeCandidate(candidates, item, "discovery"),
   );
 
-  const likedKeys = new Set(seeds.map((like) => likeKey(like)));
+  const likedKeys = new Set(likes.map((like) => feedbackKey(like)));
+  const dislikedKeys = new Set(dislikes.map((item) => feedbackKey(item)));
   const scored = [...candidates.values()]
-    .filter(({ item }) => !likedKeys.has(itemKey(item)))
+    .filter(
+      ({ item }) =>
+        !likedKeys.has(itemKey(item)) && !dislikedKeys.has(itemKey(item)),
+    )
     .map((candidate) =>
-      scoreCandidate(candidate, genreWeights, languageWeights, seeds),
+      scoreCandidate(
+        candidate,
+        genreWeights,
+        languageWeights,
+        genrePenalties,
+        languagePenalties,
+        seeds,
+      ),
     )
     .filter((item) => item.posterUrl && item.voteCount > 0)
     .sort((a, b) => b.score - a.score);
@@ -130,6 +166,8 @@ function scoreCandidate(
   candidate: Candidate,
   genreWeights: Record<MediaType, Map<number, number>>,
   languageWeights: Map<string, number>,
+  genrePenalties: Record<MediaType, Map<number, number>>,
+  languagePenalties: Map<string, number>,
   seeds: LikeRecord[],
 ): PersonalizedRecommendation {
   const { item } = candidate;
@@ -138,6 +176,13 @@ function scoreCandidate(
     0,
   );
   const languageScore = languageWeights.get(item.originalLanguage) ?? 0;
+  const negativeGenreScore = item.genreIds.reduce(
+    (score, genreId) =>
+      score + (genrePenalties[item.mediaType].get(genreId) ?? 0),
+    0,
+  );
+  const negativeLanguageScore =
+    languagePenalties.get(item.originalLanguage) ?? 0;
   const typeLikes = seeds.filter((seed) => seed.mediaType === item.mediaType).length;
   const qualityScore =
     item.voteAverage * 0.55 +
@@ -149,6 +194,8 @@ function scoreCandidate(
     candidate.discoveryHits * 1.5 +
     genreScore * 1.8 +
     languageScore +
+    negativeGenreScore * -1.15 +
+    negativeLanguageScore * -0.45 +
     (typeLikes / seeds.length) * 2 +
     qualityScore;
 
@@ -242,8 +289,10 @@ function itemKey(item: Pick<CatalogItem, "id" | "mediaType">) {
   return `${item.mediaType}:${item.id}`;
 }
 
-function likeKey(like: Pick<LikeRecord, "tmdbId" | "mediaType">) {
-  return `${like.mediaType}:${like.tmdbId}`;
+function feedbackKey(
+  item: Pick<LikeRecord | DislikeRecord, "tmdbId" | "mediaType">,
+) {
+  return `${item.mediaType}:${item.tmdbId}`;
 }
 
 function genreName(mediaType: MediaType, genreId: number) {

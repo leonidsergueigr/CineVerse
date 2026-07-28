@@ -1,14 +1,15 @@
 # CineVerse
 
-Home cinema local auto-heberge, inspire des interfaces de streaming premium, avec catalogue TMDB, recherche/filtrage, lecteur iframe configurable, suivi de progression et likes persistants.
+Home cinema local auto-heberge, inspire des interfaces de streaming premium, avec catalogue TMDB, flux de nouveautes, recherche/filtrage, lecteur iframe configurable, suivi de progression et preferences persistantes.
 
 ## Stack
 
 - Next.js App Router pour l'interface et l'API locale.
 - Tailwind CSS pour l'UI sombre type cinema.
-- SQLite via `better-sqlite3` pour l'historique, les likes et le cache des API externes.
+- SQLite via `better-sqlite3` pour l'historique, les likes/dislikes et le cache des API externes.
 - Docker Compose pour un lancement local reproductible.
 - TMDB pour les metadonnees, tendances, recherche, decouverte et recommandations.
+- Cheerio pour lire les catalogues publics de nouveautes Films et Series.
 
 ## Lancer en local
 
@@ -35,6 +36,18 @@ Les reponses TMDB deja consultees sont conservees dans `external_api_cache`.
 Les tendances expirent rapidement, tandis que les fiches et credits restent en
 cache plus longtemps. Une reponse expiree peut servir de secours si TMDB est
 temporairement indisponible.
+
+Les catalogues `Nouveautes Films` et `Nouveautes Series` suivent par defaut
+`https://fs16.lol/films/` et `https://fs16.lol/s-tv/`. CineVerse ne reprend que
+l'ordre, le titre et l'affiche, puis exige une correspondance TMDB avant
+d'afficher une fiche cliquable. Le HTML source est garde 30 minutes et les
+recherches TMDB 24 heures. `FS16_BASE_URL` permet de changer le domaine si
+necessaire.
+
+Le bloc `Pour vous` combine les recommandations et titres similaires TMDB avec
+les genres, langues, notes et popularite. Un dislike exclut toujours le titre
+concerne et applique seulement une penalite legere aux genres proches afin de
+ne pas sur-apprendre a partir d'un seul avis.
 
 ## Sources video
 
@@ -91,7 +104,9 @@ Exemple:
 - `POST /api/progress` sauvegarde la progression.
 - `GET /api/likes` liste les contenus aimes.
 - `POST /api/likes` ajoute ou retire un like.
-- `GET /api/recommendations` renvoie des recommandations basees sur les likes si possible.
+- `GET /api/dislikes` liste les contenus ignores.
+- `POST /api/dislikes` ajoute ou retire un dislike.
+- `GET /api/recommendations` renvoie des recommandations basees sur les likes et dislikes.
 
 ## Git
 

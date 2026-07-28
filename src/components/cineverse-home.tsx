@@ -1,7 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { ChevronRight, Heart, LoaderCircle, Play, Star, X } from "lucide-react";
+import {
+  ChevronRight,
+  Heart,
+  LoaderCircle,
+  Play,
+  Star,
+  ThumbsDown,
+  X,
+} from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { GENRES, LANGUAGES, SERIES_GENRES } from "@/lib/genres";
 import type {
@@ -18,6 +26,7 @@ type Props = {
   catalog: HomeCatalog;
   continueWatching: CatalogItem[];
   initialLikedKeys: string[];
+  initialDislikedKeys: string[];
   initialRecommendations: RecommendationResult;
 };
 
@@ -66,16 +75,47 @@ export function CineVerseHome({
   catalog,
   continueWatching,
   initialLikedKeys,
+  initialDislikedKeys,
   initialRecommendations,
 }: Props) {
   const [, startTransition] = useTransition();
   const [liked, setLiked] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(initialLikedKeys.map((key) => [key, true])),
   );
+  const [disliked, setDisliked] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(initialDislikedKeys.map((key) => [key, true])),
+  );
   const [recommendations, setRecommendations] = useState(initialRecommendations);
   const [recommendationsLoading, setRecommendationsLoading] = useState(false);
-  const hero = catalog.hero;
+  const [heroIndex, setHeroIndex] = useState(0);
+  const heroCandidates = useMemo(
+    () =>
+      uniqueItems([
+        catalog.hero,
+        ...recommendations.items,
+        ...catalog.heroCandidates,
+      ]).filter(
+        (item) =>
+          Boolean(item.backdropUrl ?? item.posterUrl) &&
+          !disliked[`${item.mediaType}-${item.id}`],
+      ),
+    [catalog.hero, catalog.heroCandidates, disliked, recommendations.items],
+  );
+  const hero = heroCandidates[heroIndex % Math.max(1, heroCandidates.length)] ??
+    catalog.hero;
   const heroBackground = hero.backdropUrl ?? hero.posterUrl;
+  const heroTrailerUrl =
+    hero.id === catalog.hero.id && hero.mediaType === catalog.hero.mediaType
+      ? catalog.heroTrailerUrl
+      : null;
+
+  useEffect(() => {
+    if (heroCandidates.length < 2) return;
+    const timer = window.setInterval(() => {
+      setHeroIndex((current) => (current + 1) % heroCandidates.length);
+    }, 18000);
+    return () => window.clearInterval(timer);
+  }, [heroCandidates.length]);
 
   const sections = useMemo(() => {
     const result: HomeSection[] = [
@@ -100,16 +140,39 @@ export function CineVerseHome({
   function toggleLike(item: CatalogItem) {
     const key = `${item.mediaType}-${item.id}`;
     const next = !liked[key];
+    const previous = { liked: Boolean(liked[key]), disliked: Boolean(disliked[key]) };
     setLiked((current) => ({ ...current, [key]: next }));
+    if (next) setDisliked((current) => ({ ...current, [key]: false }));
 
-    void syncLike(item, next, key);
+    void syncPreference(item, "like", next, key, previous);
   }
 
-  async function syncLike(item: CatalogItem, next: boolean, key: string) {
+  function toggleDislike(item: CatalogItem) {
+    const key = `${item.mediaType}-${item.id}`;
+    const next = !disliked[key];
+    const previous = { liked: Boolean(liked[key]), disliked: Boolean(disliked[key]) };
+    setDisliked((current) => ({ ...current, [key]: next }));
+    if (next) {
+      setLiked((current) => ({ ...current, [key]: false }));
+      setHeroIndex((current) => current + 1);
+    }
+
+    void syncPreference(item, "dislike", next, key, previous);
+  }
+
+  async function syncPreference(
+    item: CatalogItem,
+    preference: "like" | "dislike",
+    next: boolean,
+    key: string,
+    previous: { liked: boolean; disliked: boolean },
+  ) {
     setRecommendationsLoading(true);
-    let likeSaved = false;
+    let preferenceSaved = false;
     try {
-      const response = await fetch("/api/likes", {
+      const response = await fetch(
+        preference === "like" ? "/api/likes" : "/api/dislikes",
+        {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -118,11 +181,13 @@ export function CineVerseHome({
           title: item.title,
           posterPath: item.posterPath,
           backdropPath: item.backdropPath,
-          liked: next,
+          genreIds: item.genreIds,
+          originalLanguage: item.originalLanguage,
+          [preference === "like" ? "liked" : "disliked"]: next,
         }),
       });
-      if (!response.ok) throw new Error("Like update failed");
-      likeSaved = true;
+      if (!response.ok) throw new Error("Preference update failed");
+      preferenceSaved = true;
 
       const recommendationResponse = await fetch("/api/recommendations", {
         cache: "no-store",
@@ -131,7 +196,10 @@ export function CineVerseHome({
       const result = (await recommendationResponse.json()) as RecommendationResult;
       startTransition(() => setRecommendations(result));
     } catch {
-      if (!likeSaved) setLiked((current) => ({ ...current, [key]: !next }));
+      if (!preferenceSaved) {
+        setLiked((current) => ({ ...current, [key]: previous.liked }));
+        setDisliked((current) => ({ ...current, [key]: previous.disliked }));
+      }
     } finally {
       setRecommendationsLoading(false);
     }
@@ -151,9 +219,10 @@ export function CineVerseHome({
         ) : (
           <div className="poster-fallback absolute inset-0" />
         )}
-        {catalog.heroTrailerUrl ? (
+        {heroTrailerUrl ? (
           <HeroTrailer
-            url={catalog.heroTrailerUrl}
+            key={`${hero.mediaType}-${hero.id}`}
+            url={heroTrailerUrl}
             title={hero.title}
           />
         ) : null}
@@ -194,6 +263,23 @@ export function CineVerseHome({
                 />
                 {"J'aime"}
               </button>
+              <button
+                type="button"
+                onClick={() => toggleDislike(hero)}
+                aria-pressed={Boolean(disliked[`${hero.mediaType}-${hero.id}`])}
+                className={`inline-flex h-12 items-center gap-2 rounded px-5 text-sm font-bold ring-1 transition ${
+                  disliked[`${hero.mediaType}-${hero.id}`]
+                    ? "bg-white text-black ring-white"
+                    : "bg-zinc-900/85 text-white ring-white/15 hover:bg-zinc-800"
+                }`}
+              >
+                <ThumbsDown
+                  className={`h-5 w-5 ${
+                    disliked[`${hero.mediaType}-${hero.id}`] ? "fill-black" : ""
+                  }`}
+                />
+                Pas pour moi
+              </button>
             </div>
           </div>
         </div>
@@ -226,7 +312,9 @@ export function CineVerseHome({
                   key={`${section.id}-${item.mediaType}-${item.id}`}
                   item={item}
                   liked={Boolean(liked[`${item.mediaType}-${item.id}`])}
+                  disliked={Boolean(disliked[`${item.mediaType}-${item.id}`])}
                   onLike={toggleLike}
+                  onDislike={toggleDislike}
                   reason={
                     section.personalized && "reason" in item
                       ? String(item.reason)
@@ -326,21 +414,47 @@ function HeroTrailer({ url, title }: { url: string; title: string }) {
 export function BrowseExperience({
   catalog,
   initialLikedKeys = [],
+  initialDislikedKeys = [],
 }: {
   catalog: BrowseCatalog;
   initialLikedKeys?: string[];
+  initialDislikedKeys?: string[];
 }) {
   const [, startTransition] = useTransition();
   const [liked, setLiked] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(initialLikedKeys.map((key) => [key, true])),
   );
+  const [disliked, setDisliked] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(initialDislikedKeys.map((key) => [key, true])),
+  );
 
   function toggleLike(item: CatalogItem) {
     const key = `${item.mediaType}-${item.id}`;
     const next = !liked[key];
+    const previous = { liked: Boolean(liked[key]), disliked: Boolean(disliked[key]) };
     setLiked((current) => ({ ...current, [key]: next }));
+    if (next) setDisliked((current) => ({ ...current, [key]: false }));
+    syncBrowsePreference(item, "like", next, key, previous);
+  }
+
+  function toggleDislike(item: CatalogItem) {
+    const key = `${item.mediaType}-${item.id}`;
+    const next = !disliked[key];
+    const previous = { liked: Boolean(liked[key]), disliked: Boolean(disliked[key]) };
+    setDisliked((current) => ({ ...current, [key]: next }));
+    if (next) setLiked((current) => ({ ...current, [key]: false }));
+    syncBrowsePreference(item, "dislike", next, key, previous);
+  }
+
+  function syncBrowsePreference(
+    item: CatalogItem,
+    preference: "like" | "dislike",
+    next: boolean,
+    key: string,
+    previous: { liked: boolean; disliked: boolean },
+  ) {
     startTransition(() => {
-      fetch("/api/likes", {
+      fetch(preference === "like" ? "/api/likes" : "/api/dislikes", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -349,8 +463,14 @@ export function BrowseExperience({
           title: item.title,
           posterPath: item.posterPath,
           backdropPath: item.backdropPath,
-          liked: next,
+          genreIds: item.genreIds,
+          originalLanguage: item.originalLanguage,
+          [preference === "like" ? "liked" : "disliked"]: next,
         }),
+      }).then((response) => {
+        if (response.ok) return;
+        setLiked((current) => ({ ...current, [key]: previous.liked }));
+        setDisliked((current) => ({ ...current, [key]: previous.disliked }));
       });
     });
   }
@@ -364,7 +484,9 @@ export function BrowseExperience({
         <FilteredGrid
           items={catalog.items}
           liked={liked}
+          disliked={disliked}
           onLike={toggleLike}
+          onDislike={toggleDislike}
           filters={catalog.filters}
           currentPage={catalog.page}
           totalPages={catalog.totalPages}
@@ -454,7 +576,9 @@ function ActiveFilters({ filters }: { filters: CatalogFilters }) {
 function FilteredGrid({
   items,
   liked,
+  disliked,
   onLike,
+  onDislike,
   filters,
   currentPage,
   totalPages,
@@ -462,7 +586,9 @@ function FilteredGrid({
 }: {
   items: CatalogItem[];
   liked: Record<string, boolean>;
+  disliked: Record<string, boolean>;
   onLike: (item: CatalogItem) => void;
+  onDislike: (item: CatalogItem) => void;
   filters: BrowseCatalog["filters"];
   currentPage: number;
   totalPages: number;
@@ -520,7 +646,9 @@ function FilteredGrid({
             key={`filtered-${item.mediaType}-${item.id}`}
             item={item}
             liked={Boolean(liked[`${item.mediaType}-${item.id}`])}
+            disliked={Boolean(disliked[`${item.mediaType}-${item.id}`])}
             onLike={onLike}
+            onDislike={onDislike}
             compact
           />
         ))}
@@ -564,13 +692,17 @@ function FilteredGrid({
 function MediaCard({
   item,
   liked,
+  disliked,
   onLike,
+  onDislike,
   compact = false,
   reason,
 }: {
   item: CatalogItem;
   liked: boolean;
+  disliked: boolean;
   onLike: (item: CatalogItem) => void;
+  onDislike: (item: CatalogItem) => void;
   compact?: boolean;
   reason?: string;
 }) {
@@ -622,8 +754,32 @@ function MediaCard({
       >
         <Heart className={`h-4 w-4 ${liked ? "fill-[#e50914] text-[#e50914]" : ""}`} />
       </button>
+      <button
+        type="button"
+        onClick={() => onDislike(item)}
+        className={`absolute right-2 top-12 z-10 inline-flex h-8 w-8 items-center justify-center rounded shadow-lg ring-1 backdrop-blur transition ${
+          disliked
+            ? "bg-white text-black ring-white"
+            : "bg-black/85 text-zinc-100 ring-white/20 hover:bg-zinc-700"
+        }`}
+        aria-label="Pas pour moi"
+        aria-pressed={disliked}
+        title="Pas pour moi"
+      >
+        <ThumbsDown className={`h-4 w-4 ${disliked ? "fill-black" : ""}`} />
+      </button>
     </article>
   );
+}
+
+function uniqueItems(items: CatalogItem[]) {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = `${item.mediaType}-${item.id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function sortItems(items: CatalogItem[], sort: string) {
@@ -667,6 +823,13 @@ function activeFilterLabels(filters: CatalogFilters) {
   if (filters.query) labels.push({ key: "query", label: `Recherche : ${filters.query}` });
   if (filters.catalog === "anime") {
     labels.push({ key: "catalog", label: "Catalogue : Animes" });
+  } else if (filters.catalog === "new") {
+    labels.push({
+      key: "catalog",
+      label: `Catalogue : Nouveautes ${
+        filters.mediaType === "tv" ? "Series" : "Films"
+      }`,
+    });
   } else if (filters.mediaType) {
     labels.push({
       key: "mediaType",

@@ -39,6 +39,7 @@ export type CatalogSection = {
 
 export type HomeCatalog = {
   hero: CatalogItem;
+  heroCandidates: CatalogItem[];
   heroTrailerUrl: string | null;
   sections: CatalogSection[];
 };
@@ -92,6 +93,17 @@ export type LikeRecord = {
   likedAt: string;
 };
 
+export type DislikeRecord = {
+  tmdbId: number;
+  mediaType: MediaType;
+  title: string;
+  posterPath: string | null;
+  backdropPath: string | null;
+  genreIds: number[];
+  originalLanguage: string;
+  dislikedAt: string;
+};
+
 export type PersonalizedRecommendation = CatalogItem & {
   reason: string;
   score: number;
@@ -102,6 +114,7 @@ export type RecommendationResult = {
   strategy: "personalized" | "empty";
   profile: {
     likeCount: number;
+    dislikeCount: number;
     movieCount: number;
     seriesCount: number;
     topGenres: Array<{ name: string; weight: number }>;

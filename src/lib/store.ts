@@ -1,7 +1,12 @@
 import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
-import type { LikeRecord, MediaType, WatchProgress } from "@/lib/types";
+import type {
+  DislikeRecord,
+  LikeRecord,
+  MediaType,
+  WatchProgress,
+} from "@/lib/types";
 
 type ProgressInput = {
   tmdbId: number;
@@ -22,6 +27,28 @@ type LikeInput = {
   posterPath?: string | null;
   backdropPath?: string | null;
   liked: boolean;
+};
+
+type DislikeInput = {
+  tmdbId: number;
+  mediaType: MediaType;
+  title: string;
+  posterPath?: string | null;
+  backdropPath?: string | null;
+  genreIds?: number[];
+  originalLanguage?: string;
+  disliked: boolean;
+};
+
+type DbDislike = {
+  tmdbId: number;
+  mediaType: MediaType;
+  title: string;
+  posterPath: string | null;
+  backdropPath: string | null;
+  genreIds: string;
+  originalLanguage: string;
+  dislikedAt: string;
 };
 
 type ApiCacheRow = {
@@ -66,6 +93,20 @@ export function getDb() {
       poster_path text,
       backdrop_path text,
       liked_at text not null default current_timestamp,
+      unique(user_id, tmdb_id, media_type)
+    );
+
+    create table if not exists user_dislikes (
+      id integer primary key autoincrement,
+      user_id text not null default 'local',
+      tmdb_id integer not null,
+      media_type text not null,
+      title text not null,
+      poster_path text,
+      backdrop_path text,
+      genre_ids text not null default '[]',
+      original_language text not null default '',
+      disliked_at text not null default current_timestamp,
       unique(user_id, tmdb_id, media_type)
     );
 
@@ -238,17 +279,25 @@ export function setLike(input: LikeInput) {
     return;
   }
 
-  getDb()
-    .prepare(
-      `
-      insert into user_likes (user_id, tmdb_id, media_type, title, poster_path, backdrop_path, liked_at)
-      values ('local', @tmdbId, @mediaType, @title, @posterPath, @backdropPath, datetime('now'))
-      on conflict(user_id, tmdb_id, media_type)
-      do update set liked_at = datetime('now'), title = excluded.title,
-        poster_path = excluded.poster_path, backdrop_path = excluded.backdrop_path
-    `,
-    )
-    .run(input);
+  const database = getDb();
+  database.transaction(() => {
+    database
+      .prepare(
+        "delete from user_dislikes where user_id = 'local' and tmdb_id = ? and media_type = ?",
+      )
+      .run(input.tmdbId, input.mediaType);
+    database
+      .prepare(
+        `
+        insert into user_likes (user_id, tmdb_id, media_type, title, poster_path, backdrop_path, liked_at)
+        values ('local', @tmdbId, @mediaType, @title, @posterPath, @backdropPath, datetime('now'))
+        on conflict(user_id, tmdb_id, media_type)
+        do update set liked_at = datetime('now'), title = excluded.title,
+          poster_path = excluded.poster_path, backdrop_path = excluded.backdrop_path
+      `,
+      )
+      .run(input);
+  })();
 }
 
 export function getLikes(limit = 24): LikeRecord[] {
@@ -270,6 +319,79 @@ export function hasLike(tmdbId: number, mediaType: MediaType) {
   const row = getDb()
     .prepare(
       "select 1 from user_likes where user_id = 'local' and tmdb_id = ? and media_type = ? limit 1",
+    )
+    .get(tmdbId, mediaType);
+  return Boolean(row);
+}
+
+export function setDislike(input: DislikeInput) {
+  const database = getDb();
+  if (!input.disliked) {
+    database
+      .prepare(
+        "delete from user_dislikes where user_id = 'local' and tmdb_id = ? and media_type = ?",
+      )
+      .run(input.tmdbId, input.mediaType);
+    return;
+  }
+
+  database.transaction(() => {
+    database
+      .prepare(
+        "delete from user_likes where user_id = 'local' and tmdb_id = ? and media_type = ?",
+      )
+      .run(input.tmdbId, input.mediaType);
+    database
+      .prepare(
+        `
+        insert into user_dislikes (
+          user_id, tmdb_id, media_type, title, poster_path, backdrop_path,
+          genre_ids, original_language, disliked_at
+        )
+        values (
+          'local', @tmdbId, @mediaType, @title, @posterPath, @backdropPath,
+          @genreIds, @originalLanguage, datetime('now')
+        )
+        on conflict(user_id, tmdb_id, media_type)
+        do update set disliked_at = datetime('now'), title = excluded.title,
+          poster_path = excluded.poster_path, backdrop_path = excluded.backdrop_path,
+          genre_ids = excluded.genre_ids, original_language = excluded.original_language
+      `,
+      )
+      .run({
+        ...input,
+        genreIds: JSON.stringify(input.genreIds ?? []),
+        originalLanguage: input.originalLanguage ?? "",
+      });
+  })();
+}
+
+export function getDislikes(limit = 48): DislikeRecord[] {
+  const rows = getDb()
+    .prepare(
+      `
+      select tmdb_id as tmdbId, media_type as mediaType, title,
+        poster_path as posterPath, backdrop_path as backdropPath,
+        genre_ids as genreIds, original_language as originalLanguage,
+        disliked_at as dislikedAt
+      from user_dislikes
+      where user_id = 'local'
+      order by disliked_at desc
+      limit ?
+    `,
+    )
+    .all(limit) as DbDislike[];
+
+  return rows.map((row) => ({
+    ...row,
+    genreIds: parseNumberArray(row.genreIds),
+  }));
+}
+
+export function hasDislike(tmdbId: number, mediaType: MediaType) {
+  const row = getDb()
+    .prepare(
+      "select 1 from user_dislikes where user_id = 'local' and tmdb_id = ? and media_type = ? limit 1",
     )
     .get(tmdbId, mediaType);
   return Boolean(row);
@@ -303,4 +425,15 @@ function mapProgress(row: DbProgress): WatchProgress {
     completed: Boolean(row.completed),
     updatedAt: row.updated_at,
   };
+}
+
+function parseNumberArray(value: string) {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.map(Number).filter(Number.isFinite)
+      : [];
+  } catch {
+    return [];
+  }
 }

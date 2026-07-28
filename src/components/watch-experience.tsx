@@ -1,7 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowLeft, Heart, Languages, Play, Server, Star, ToggleRight } from "lucide-react";
+import {
+  ArrowLeft,
+  Heart,
+  Languages,
+  Play,
+  Server,
+  Star,
+  ThumbsDown,
+  ToggleRight,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { buildEmbedUrl, getProviderLanguages } from "@/lib/providers";
 import { SiteHeader } from "@/components/site-header";
@@ -12,6 +21,7 @@ type Props = {
   providers: EmbedProvider[];
   initialProgress: WatchProgress | null;
   initialLiked: boolean;
+  initialDisliked: boolean;
   initialSeason: number | null;
   initialEpisode: number | null;
 };
@@ -21,6 +31,7 @@ export function WatchExperience({
   providers,
   initialProgress,
   initialLiked,
+  initialDisliked,
   initialSeason,
   initialEpisode,
 }: Props) {
@@ -45,6 +56,7 @@ export function WatchExperience({
   const [episode, setEpisode] = useState(initialEpisodeNumber);
   const [started, setStarted] = useState(false);
   const [liked, setLiked] = useState(initialLiked);
+  const [disliked, setDisliked] = useState(initialDisliked);
   const [autoNext, setAutoNext] = useState(true);
   const [playerLoadToken, setPlayerLoadToken] = useState(0);
   const [progress, setProgress] = useState({
@@ -209,7 +221,9 @@ export function WatchExperience({
 
   function like() {
     const next = !liked;
+    const previous = { liked, disliked };
     setLiked(next);
+    if (next) setDisliked(false);
     startTransition(() => {
       void fetch("/api/likes", {
         method: "POST",
@@ -223,7 +237,38 @@ export function WatchExperience({
           liked: next,
         }),
       }).then((response) => {
-        if (!response.ok) setLiked(!next);
+        if (!response.ok) {
+          setLiked(previous.liked);
+          setDisliked(previous.disliked);
+        }
+      });
+    });
+  }
+
+  function dislike() {
+    const next = !disliked;
+    const previous = { liked, disliked };
+    setDisliked(next);
+    if (next) setLiked(false);
+    startTransition(() => {
+      void fetch("/api/dislikes", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          tmdbId: detail.id,
+          mediaType: detail.mediaType,
+          title: detail.title,
+          posterPath: detail.posterPath,
+          backdropPath: detail.backdropPath,
+          genreIds: detail.genreIds,
+          originalLanguage: detail.originalLanguage,
+          disliked: next,
+        }),
+      }).then((response) => {
+        if (!response.ok) {
+          setLiked(previous.liked);
+          setDisliked(previous.disliked);
+        }
       });
     });
   }
@@ -519,19 +564,36 @@ export function WatchExperience({
                     />
                   </label>
                 ) : null}
-                <button
-                  type="button"
-                  onClick={like}
-                  aria-pressed={liked}
-                  className={`inline-flex h-11 items-center justify-center gap-2 rounded px-4 text-sm font-bold transition ${
-                    liked
-                      ? "bg-[#e50914] text-white hover:bg-[#f6121d]"
-                      : "bg-white text-black hover:bg-zinc-200"
-                  }`}
-                >
-                  <Heart className={`h-4 w-4 ${liked ? "fill-white" : ""}`} />
-                  {liked ? "Aime" : "J'aime"}
-                </button>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={like}
+                    aria-pressed={liked}
+                    className={`inline-flex h-11 items-center justify-center gap-2 rounded px-3 text-sm font-bold transition ${
+                      liked
+                        ? "bg-[#e50914] text-white hover:bg-[#f6121d]"
+                        : "bg-white text-black hover:bg-zinc-200"
+                    }`}
+                  >
+                    <Heart className={`h-4 w-4 ${liked ? "fill-white" : ""}`} />
+                    {liked ? "Aime" : "J'aime"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={dislike}
+                    aria-pressed={disliked}
+                    className={`inline-flex h-11 items-center justify-center gap-2 rounded px-3 text-sm font-bold transition ${
+                      disliked
+                        ? "bg-white text-black"
+                        : "bg-white/[0.06] text-zinc-200 ring-1 ring-white/10 hover:bg-white/10"
+                    }`}
+                  >
+                    <ThumbsDown
+                      className={`h-4 w-4 ${disliked ? "fill-black" : ""}`}
+                    />
+                    {disliked ? "Ignore" : "Pas pour moi"}
+                  </button>
+                </div>
                 <div className="rounded bg-white/5 p-3 text-xs text-zinc-300">
                   {formatTime(progress.currentTime)} / {formatTime(progress.duration)}
                 </div>
