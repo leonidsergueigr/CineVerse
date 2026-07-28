@@ -137,16 +137,20 @@ export function getContinueWatching(limit = 12): WatchProgress[] {
   const rows = getDb()
     .prepare(
       `
-      select * from watch_history
-      where id in (
-        select max(id)
+      with ranked_history as (
+        select *,
+          row_number() over (
+            partition by user_id, tmdb_id, media_type
+            order by datetime(updated_at) desc, id desc
+          ) as media_rank
         from watch_history
         where user_id = 'local'
-        group by user_id, tmdb_id, media_type, coalesce(season_number, -1), coalesce(episode_number, -1)
       )
+      select * from ranked_history
+      where media_rank = 1
         and completed = 0
         and progress_seconds > 0
-      order by updated_at desc
+      order by datetime(updated_at) desc, id desc
       limit ?
     `,
     )

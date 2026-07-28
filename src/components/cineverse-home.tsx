@@ -442,7 +442,10 @@ function MediaCard({
         href={`/watch/${item.mediaType}/${item.id}`}
         className="block overflow-hidden rounded bg-zinc-900 ring-1 ring-white/10 transition duration-200 hover:scale-[1.03] hover:ring-white/30"
       >
-        <div className="relative aspect-[2/3] bg-zinc-900">
+        <div
+          suppressHydrationWarning
+          className="relative aspect-[2/3] bg-zinc-900"
+        >
           {item.posterUrl ? (
             <img
               src={item.posterUrl}
