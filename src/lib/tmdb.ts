@@ -100,7 +100,7 @@ export async function getHomeCatalog(): Promise<HomeCatalog> {
     {
       id: "series",
       title: "Series a devorer",
-      items: trendingTv.filter((item) => !item.genreIds.includes(16)),
+      items: trendingTv.filter((item) => !isAnimeItem(item)),
     },
     { id: "anime", title: "Animes du moment", items: anime },
     { id: "mood", title: "Soiree science-fiction", items: mood },
@@ -186,7 +186,16 @@ export async function discoverWithMeta(filters: CatalogFilters, withFallback = f
   }
 
   const data = await tmdb<TmdbList>(`/discover/${mediaType}`, params);
-  return normalizeMeta(data, mediaType, withFallback);
+  const result = normalizeMeta(data, mediaType, withFallback);
+
+  if (mediaType === "tv" && !isAnime && genre) {
+    return {
+      ...result,
+      items: result.items.filter((item) => !isAnimeItem(item)),
+    };
+  }
+
+  return result;
 }
 
 export async function search(query: string, mediaType?: string, withFallback = false) {
@@ -428,6 +437,10 @@ function normalizeItem(result: TmdbResult, forcedType?: MediaType): CatalogItem 
     genreIds: result.genre_ids ?? result.genres?.map((genre) => genre.id) ?? [],
     originalLanguage: result.original_language ?? "na",
   };
+}
+
+function isAnimeItem(item: CatalogItem) {
+  return item.originalLanguage === "ja" && item.genreIds.includes(16);
 }
 
 function isYoutubeTrailer(video: TmdbVideo) {

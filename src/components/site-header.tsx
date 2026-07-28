@@ -121,9 +121,7 @@ function BrowseMenu({
   const isAnime = menu === "anime";
   const mediaType = menu === "movie" ? "movie" : "tv";
   const isMovie = mediaType === "movie";
-  const genres = isMovie
-    ? GENRES
-    : SERIES_GENRES.filter((genre) => isAnime || genre.id !== 16);
+  const genres = isMovie ? GENRES : SERIES_GENRES;
   const label = isAnime ? "animes" : isMovie ? "films" : "series";
   const title = isAnime ? "Animes" : isMovie ? "Films" : "Series";
 
