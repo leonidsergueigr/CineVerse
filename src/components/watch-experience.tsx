@@ -24,8 +24,12 @@ export function WatchExperience({
   initialSeason,
   initialEpisode,
 }: Props) {
-  const availableSeasons = (detail.seasons ?? []).filter(
-    (item) => item.episodeCount > 0,
+  const availableSeasons = useMemo(
+    () =>
+      (detail.seasons ?? [])
+        .filter((item) => item.episodeCount > 0)
+        .sort((a, b) => a.seasonNumber - b.seasonNumber),
+    [detail.seasons],
   );
   const firstSeason =
     availableSeasons.find((item) => item.seasonNumber === initialSeason) ??
@@ -42,6 +46,7 @@ export function WatchExperience({
   const [started, setStarted] = useState(false);
   const [liked, setLiked] = useState(initialLiked);
   const [autoNext, setAutoNext] = useState(true);
+  const [playerLoadToken, setPlayerLoadToken] = useState(0);
   const [progress, setProgress] = useState({
     currentTime: initialProgress?.progressSeconds ?? 0,
     duration: initialProgress?.durationSeconds ?? 0,
@@ -49,6 +54,7 @@ export function WatchExperience({
   const [, startTransition] = useTransition();
   const lastSaveRef = useRef(0);
   const autoAdvancedRef = useRef("");
+  const playerFrameRef = useRef<HTMLIFrameElement>(null);
 
   const provider = providers.find((item) => item.id === providerId) ?? providers[0];
   const languageOptions = useMemo(() => getProviderLanguages(provider), [provider]);
@@ -74,42 +80,70 @@ export function WatchExperience({
     });
   }, [activeLanguage, autoNext, detail, episode, provider, season, started]);
 
+  const advanceEpisode = useCallback(() => {
+    if (!autoNext || detail.mediaType !== "tv") return false;
+    const key = `${season}-${episode}`;
+    if (autoAdvancedRef.current === key) return false;
+
+    const currentSeason = availableSeasons.find(
+      (item) => item.seasonNumber === season,
+    );
+    const nextEpisode = episode + 1;
+    if (currentSeason && nextEpisode <= currentSeason.episodeCount) {
+      autoAdvancedRef.current = key;
+      setEpisode(nextEpisode);
+      setProgress({ currentTime: 0, duration: 0 });
+      replaceEpisodeUrl(season, nextEpisode);
+      return true;
+    }
+
+    const nextSeason = availableSeasons.find(
+      (item) => item.seasonNumber > season && item.episodeCount > 0,
+    );
+    if (nextSeason) {
+      autoAdvancedRef.current = key;
+      setSeason(nextSeason.seasonNumber);
+      setEpisode(1);
+      setProgress({ currentTime: 0, duration: 0 });
+      replaceEpisodeUrl(nextSeason.seasonNumber, 1);
+      return true;
+    }
+    return false;
+  }, [autoNext, availableSeasons, detail.mediaType, episode, season]);
+
   const maybeAutoAdvance = useCallback(
     (currentTime: number, duration: number) => {
-      if (!autoNext || detail.mediaType !== "tv" || duration <= 0) return;
-      if (currentTime / duration < 0.98) return;
-
-      const key = `${season}-${episode}`;
-      if (autoAdvancedRef.current === key) return;
-      autoAdvancedRef.current = key;
-
-      const currentSeason = detail.seasons?.find((item) => item.seasonNumber === season);
-      const nextEpisode = episode + 1;
-      if (currentSeason && nextEpisode <= currentSeason.episodeCount) {
-        setEpisode(nextEpisode);
-        setProgress({ currentTime: 0, duration: 0 });
-        return;
-      }
-
-      const nextSeason = detail.seasons?.find(
-        (item) => item.seasonNumber > season && item.episodeCount > 0,
-      );
-      if (nextSeason) {
-        setSeason(nextSeason.seasonNumber);
-        setEpisode(1);
-        setProgress({ currentTime: 0, duration: 0 });
-      }
+      if (duration <= 0 || currentTime / duration < 0.98) return;
+      advanceEpisode();
     },
-    [autoNext, detail.mediaType, detail.seasons, episode, season],
+    [advanceEpisode],
   );
 
   useEffect(() => {
     function onMessage(event: MessageEvent) {
-      const data = typeof event.data === "string" ? parseJson(event.data) : event.data;
-      if (!data || data.type !== "cineverse:timeupdate") return;
+      if (event.source !== playerFrameRef.current?.contentWindow) return;
+      const data =
+        typeof event.data === "string"
+          ? parseJson(event.data) ?? event.data
+          : event.data;
+      const playbackEvent = normalizePlaybackEvent(data);
+      if (!playbackEvent) return;
 
-      const currentTime = Number(data.currentTime);
-      const duration = Number(data.duration);
+      if (playbackEvent.ended) {
+        if (playbackEvent.duration > 0) {
+          saveCompletedProgress(
+            detail,
+            season,
+            episode,
+            playbackEvent.duration,
+          );
+        }
+        advanceEpisode();
+        return;
+      }
+
+      const currentTime = playbackEvent.currentTime;
+      const duration = playbackEvent.duration;
       if (!Number.isFinite(currentTime) || !Number.isFinite(duration)) return;
 
       setProgress({ currentTime, duration });
@@ -137,7 +171,41 @@ export function WatchExperience({
 
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [detail, episode, maybeAutoAdvance, season]);
+  }, [advanceEpisode, detail, episode, maybeAutoAdvance, season]);
+
+  useEffect(() => {
+    if (
+      !started ||
+      !autoNext ||
+      detail.mediaType !== "tv" ||
+      provider?.supportsTracking ||
+      playerLoadToken === 0
+    ) {
+      return;
+    }
+
+    const fallbackDurationSeconds = Math.max(60, (detail.runtime ?? 45) * 60);
+    const timer = window.setTimeout(() => {
+      saveCompletedProgress(
+        detail,
+        season,
+        episode,
+        fallbackDurationSeconds,
+      );
+      advanceEpisode();
+    }, fallbackDurationSeconds * 1000);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    advanceEpisode,
+    autoNext,
+    detail,
+    episode,
+    playerLoadToken,
+    provider?.supportsTracking,
+    season,
+    started,
+  ]);
 
   function like() {
     const next = !liked;
@@ -165,12 +233,14 @@ export function WatchExperience({
     setEpisode(1);
     setProgress({ currentTime: 0, duration: 0 });
     autoAdvancedRef.current = "";
+    replaceEpisodeUrl(nextSeason, 1);
   }
 
   function changeEpisode(nextEpisode: number) {
     setEpisode(nextEpisode);
     setProgress({ currentTime: 0, duration: 0 });
     autoAdvancedRef.current = "";
+    replaceEpisodeUrl(season, nextEpisode);
   }
 
   function startPlayback() {
@@ -226,9 +296,11 @@ export function WatchExperience({
             {started && iframeUrl ? (
               <iframe
                 key={iframeUrl}
+                ref={playerFrameRef}
                 src={iframeUrl}
                 allow="autoplay; fullscreen; picture-in-picture"
                 allowFullScreen
+                onLoad={() => setPlayerLoadToken((value) => value + 1)}
                 className="h-full min-h-[55vh] w-full border-0"
                 title={`Lecteur ${detail.title}`}
               />
@@ -478,6 +550,69 @@ function parseJson(value: string) {
   } catch {
     return null;
   }
+}
+
+function normalizePlaybackEvent(data: unknown) {
+  if (typeof data === "string") {
+    return isEndedEvent(data)
+      ? { currentTime: 0, duration: 0, ended: true }
+      : null;
+  }
+  if (!data || typeof data !== "object") return null;
+
+  const message = data as Record<string, unknown>;
+  const eventName = String(
+    message.type ?? message.event ?? message.action ?? "",
+  );
+  const currentTime = Number(message.currentTime ?? message.time ?? 0);
+  const duration = Number(message.duration ?? message.total ?? 0);
+  const percentage = Number(message.percentage ?? message.percent ?? 0);
+  const ended =
+    isEndedEvent(eventName) ||
+    Number((message.info as Record<string, unknown> | undefined)?.playerState) === 0 ||
+    percentage >= 98;
+
+  if (ended) return { currentTime, duration, ended: true };
+  if (currentTime > 0 && duration > 0) {
+    return { currentTime, duration, ended: false };
+  }
+  return null;
+}
+
+function isEndedEvent(value: string) {
+  return ["ended", "videoended", "complete", "completed"].includes(
+    value.toLowerCase(),
+  );
+}
+
+function replaceEpisodeUrl(season: number, episode: number) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("season", String(season));
+  url.searchParams.set("episode", String(episode));
+  window.history.replaceState(null, "", url);
+}
+
+function saveCompletedProgress(
+  detail: MediaDetails,
+  season: number,
+  episode: number,
+  duration: number,
+) {
+  void fetch("/api/progress", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      tmdbId: detail.id,
+      mediaType: detail.mediaType,
+      seasonNumber: season,
+      episodeNumber: episode,
+      title: detail.title,
+      posterPath: detail.posterPath,
+      backdropPath: detail.backdropPath,
+      progressSeconds: duration,
+      durationSeconds: duration,
+    }),
+  });
 }
 
 function personBrowseHref(
