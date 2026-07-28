@@ -24,7 +24,13 @@ type LikeInput = {
   liked: boolean;
 };
 
+type ApiCacheRow = {
+  payload: string;
+  expires_at: number;
+};
+
 let db: Database.Database | null = null;
+let lastCachePrune = 0;
 
 export function getDb() {
   if (db) return db;
@@ -62,9 +68,72 @@ export function getDb() {
       liked_at text not null default current_timestamp,
       unique(user_id, tmdb_id, media_type)
     );
+
+    create table if not exists external_api_cache (
+      cache_key text primary key,
+      payload text not null,
+      expires_at integer not null,
+      updated_at integer not null
+    );
+
+    create index if not exists external_api_cache_expiry
+      on external_api_cache(expires_at);
   `);
 
   return db;
+}
+
+export function getCachedApiResponse<T>(cacheKey: string) {
+  const row = getDb()
+    .prepare(
+      `
+      select payload, expires_at
+      from external_api_cache
+      where cache_key = ?
+      limit 1
+    `,
+    )
+    .get(cacheKey) as ApiCacheRow | undefined;
+
+  if (!row) return null;
+
+  try {
+    return {
+      value: JSON.parse(row.payload) as T,
+      stale: row.expires_at <= Date.now(),
+    };
+  } catch {
+    getDb()
+      .prepare("delete from external_api_cache where cache_key = ?")
+      .run(cacheKey);
+    return null;
+  }
+}
+
+export function setCachedApiResponse(
+  cacheKey: string,
+  value: unknown,
+  ttlSeconds: number,
+) {
+  const now = Date.now();
+  getDb()
+    .prepare(
+      `
+      insert into external_api_cache (cache_key, payload, expires_at, updated_at)
+      values (?, ?, ?, ?)
+      on conflict(cache_key) do update set
+        payload = excluded.payload,
+        expires_at = excluded.expires_at,
+        updated_at = excluded.updated_at
+    `,
+    )
+    .run(cacheKey, JSON.stringify(value), now + ttlSeconds * 1000, now);
+
+  if (now - lastCachePrune < 24 * 60 * 60 * 1000) return;
+  lastCachePrune = now;
+  getDb()
+    .prepare("delete from external_api_cache where expires_at < ?")
+    .run(now - 30 * 24 * 60 * 60 * 1000);
 }
 
 export function saveProgress(input: ProgressInput) {

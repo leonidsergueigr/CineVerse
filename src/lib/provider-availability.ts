@@ -1,5 +1,6 @@
 import "server-only";
 
+import { getCachedApiResponse, setCachedApiResponse } from "@/lib/store";
 import type { EmbedProvider, MediaDetails, MediaType } from "@/lib/types";
 
 type ProviderMediaInfo = {
@@ -79,6 +80,9 @@ async function checkAvailability(
     /\{tmdbId\}/g,
     encodeURIComponent(String(tmdbId)),
   );
+  const cacheKey = `provider:${provider.id}:availability:${url}`;
+  const cached = getCachedApiResponse<ProviderMediaInfo | false>(cacheKey);
+  if (cached && !cached.stale) return cached.value;
 
   try {
     const response = await fetch(url, {
@@ -88,10 +92,15 @@ async function checkAvailability(
     if (!response.ok) return null;
 
     const data = (await response.json()) as AvailabilityResponse;
-    if (data.available === false) return false;
-    if (data.available !== true || !matchesMediaType(data.detectedType, mediaType)) return null;
+    if (data.available === false) {
+      setCachedApiResponse(cacheKey, false, 10 * 60);
+      return false;
+    }
+    if (data.available !== true || !matchesMediaType(data.detectedType, mediaType)) {
+      return cached?.value ?? null;
+    }
 
-    return {
+    const info = {
       providerId: provider.id,
       title: data.title?.trim() || null,
       year: Number.isFinite(data.year) ? Number(data.year) : null,
@@ -100,9 +109,11 @@ async function checkAvailability(
         ? data.languages.filter((language): language is string => typeof language === "string")
         : [],
     };
+    setCachedApiResponse(cacheKey, info, 30 * 60);
+    return info;
   } catch (error) {
     console.error(`Provider availability failed for ${provider.id}`, error);
-    return null;
+    return cached?.value ?? null;
   }
 }
 

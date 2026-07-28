@@ -1,5 +1,6 @@
 import { fallbackCatalog, fallbackDetails } from "@/lib/fallback-data";
 import dns from "node:dns";
+import { getCachedApiResponse, setCachedApiResponse } from "@/lib/store";
 import type {
   BrowseCatalog,
   CatalogFilters,
@@ -11,6 +12,7 @@ import type {
 
 const TMDB_BASE_URL = "https://api.themoviedb.org/3";
 const IMAGE_BASE_URL = "https://image.tmdb.org/t/p";
+const tmdbRequests = new Map<string, Promise<unknown | null>>();
 
 dns.setDefaultResultOrder("ipv4first");
 
@@ -341,9 +343,35 @@ async function tmdb<T>(
   params: Record<string, string>,
   options: { noStore?: boolean } = {},
 ): Promise<T | null> {
+  const cacheKey = tmdbCacheKey(path, params);
+  const cached = getCachedApiResponse<T>(cacheKey);
+  if (cached && !cached.stale) return cached.value;
+
+  const pending = tmdbRequests.get(cacheKey);
+  if (pending) return (await pending) as T | null;
+
+  const request = fetchTmdb<T>(path, params, options, cached?.value ?? null);
+  tmdbRequests.set(cacheKey, request);
+  try {
+    const result = await request;
+    if (result !== null) {
+      setCachedApiResponse(cacheKey, result, tmdbCacheTtl(path));
+    }
+    return result;
+  } finally {
+    tmdbRequests.delete(cacheKey);
+  }
+}
+
+async function fetchTmdb<T>(
+  path: string,
+  params: Record<string, string>,
+  options: { noStore?: boolean },
+  staleValue: T | null,
+): Promise<T | null> {
   const accessToken = process.env.TMDB_ACCESS_TOKEN;
   const apiKey = process.env.TMDB_API_KEY;
-  if (!accessToken && !apiKey) return null;
+  if (!accessToken && !apiKey) return staleValue;
 
   const credentials: Array<{ accessToken: string } | { apiKey: string }> = [];
   if (accessToken) credentials.push({ accessToken });
@@ -366,13 +394,13 @@ async function tmdb<T>(
           : { next: { revalidate: 60 * 30 } }),
       });
       if (response.ok) return (await response.json()) as T;
-      if (![401, 403].includes(response.status)) return null;
+      if (![401, 403].includes(response.status)) return staleValue;
     } catch (error) {
       console.error(`TMDB request failed for ${path}`, error);
     }
   }
 
-  return null;
+  return staleValue;
 }
 
 async function fetchWithRetry(url: URL, init: RequestInit, attempts = 3) {
@@ -486,6 +514,25 @@ function normalizedPage(page?: string) {
   const value = Number(page);
   if (!Number.isFinite(value)) return "1";
   return String(Math.max(1, Math.floor(value)));
+}
+
+function tmdbCacheKey(path: string, params: Record<string, string>) {
+  const query = new URLSearchParams(
+    Object.entries({ language: "fr-FR", ...params }).sort(([a], [b]) =>
+      a.localeCompare(b),
+    ),
+  );
+  return `tmdb:${path}?${query.toString()}`;
+}
+
+function tmdbCacheTtl(path: string) {
+  if (path.startsWith("/trending/")) return 60 * 60;
+  if (path.startsWith("/discover/") || path.startsWith("/search/")) return 6 * 60 * 60;
+  if (path.endsWith("/videos")) return 24 * 60 * 60;
+  if (path.includes("/recommendations") || path.endsWith("/similar")) {
+    return 12 * 60 * 60;
+  }
+  return 7 * 24 * 60 * 60;
 }
 
 function tmdbSort(sort: string | undefined, mediaType: MediaType) {

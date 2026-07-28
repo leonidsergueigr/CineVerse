@@ -6,7 +6,7 @@ Home cinema local auto-heberge, inspire des interfaces de streaming premium, ave
 
 - Next.js App Router pour l'interface et l'API locale.
 - Tailwind CSS pour l'UI sombre type cinema.
-- SQLite via `better-sqlite3` pour `watch_history` et `user_likes`.
+- SQLite via `better-sqlite3` pour l'historique, les likes et le cache des API externes.
 - Docker Compose pour un lancement local reproductible.
 - TMDB pour les metadonnees, tendances, recherche, decouverte et recommandations.
 
@@ -30,6 +30,11 @@ docker compose up --build
 ```
 
 La base SQLite est montee dans `./data/cineverse.sqlite`.
+
+Les reponses TMDB deja consultees sont conservees dans `external_api_cache`.
+Les tendances expirent rapidement, tandis que les fiches et credits restent en
+cache plus longtemps. Une reponse expiree peut servir de secours si TMDB est
+temporairement indisponible.
 
 ## Sources video
 
