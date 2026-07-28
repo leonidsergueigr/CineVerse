@@ -24,10 +24,21 @@ export function WatchExperience({
   initialSeason,
   initialEpisode,
 }: Props) {
+  const availableSeasons = (detail.seasons ?? []).filter(
+    (item) => item.episodeCount > 0,
+  );
+  const firstSeason =
+    availableSeasons.find((item) => item.seasonNumber === initialSeason) ??
+    availableSeasons[0];
+  const initialSeasonNumber = firstSeason?.seasonNumber ?? 1;
+  const initialEpisodeNumber = Math.min(
+    firstSeason?.episodeCount ?? 1,
+    Math.max(1, initialEpisode ?? 1),
+  );
   const [providerId, setProviderId] = useState(providers[0]?.id ?? "");
   const [language, setLanguage] = useState("vf");
-  const [season, setSeason] = useState(initialSeason ?? 1);
-  const [episode, setEpisode] = useState(initialEpisode ?? 1);
+  const [season, setSeason] = useState(initialSeasonNumber);
+  const [episode, setEpisode] = useState(initialEpisodeNumber);
   const [started, setStarted] = useState(false);
   const [liked, setLiked] = useState(initialLiked);
   const [autoNext, setAutoNext] = useState(true);
@@ -45,6 +56,13 @@ export function WatchExperience({
   const activeLanguage = languageOptions.some((option) => option.id === language)
     ? language
     : defaultLanguage;
+  const selectedSeason =
+    availableSeasons.find((item) => item.seasonNumber === season) ??
+    availableSeasons[0];
+  const episodeOptions = Array.from(
+    { length: selectedSeason?.episodeCount ?? 1 },
+    (_, index) => index + 1,
+  );
   const iframeUrl = useMemo(() => {
     if (!provider) return "";
     return buildEmbedUrl(provider, detail, {
@@ -142,6 +160,19 @@ export function WatchExperience({
     });
   }
 
+  function changeSeason(nextSeason: number) {
+    setSeason(nextSeason);
+    setEpisode(1);
+    setProgress({ currentTime: 0, duration: 0 });
+    autoAdvancedRef.current = "";
+  }
+
+  function changeEpisode(nextEpisode: number) {
+    setEpisode(nextEpisode);
+    setProgress({ currentTime: 0, duration: 0 });
+    autoAdvancedRef.current = "";
+  }
+
   function startPlayback() {
     setStarted(true);
     if (progress.currentTime > 0) return;
@@ -164,6 +195,10 @@ export function WatchExperience({
   }
 
   const percent = progress.duration ? Math.min(100, (progress.currentTime / progress.duration) * 100) : 0;
+  const isAnime =
+    detail.mediaType === "tv" &&
+    detail.originalLanguage === "ja" &&
+    detail.genreIds.includes(16);
 
   return (
     <main className="min-h-screen overflow-x-hidden bg-[#050505] pt-16 text-white">
@@ -255,7 +290,7 @@ export function WatchExperience({
                   {detail.genres.map((genre) => (
                     <Link
                       key={genre.id}
-                      href={`/browse?type=${detail.mediaType}&genre=${genre.id}`}
+                      href={`/browse?type=${detail.mediaType}${isAnime ? "&catalog=anime" : ""}&genre=${genre.id}`}
                       className="rounded bg-white/10 px-3 py-1 text-xs text-zinc-200 transition hover:bg-[#e50914] hover:text-white"
                     >
                       {genre.name}
@@ -345,22 +380,26 @@ export function WatchExperience({
                   <div className="grid grid-cols-2 gap-3">
                     <select
                       value={season}
-                      onChange={(event) => setSeason(Number(event.target.value))}
+                      onChange={(event) => changeSeason(Number(event.target.value))}
                       className="control-field w-full"
                     >
-                      {(detail.seasons ?? []).map((item) => (
+                      {availableSeasons.map((item) => (
                         <option key={item.id} value={item.seasonNumber}>
                           Saison {item.seasonNumber}
                         </option>
                       ))}
                     </select>
-                    <input
+                    <select
                       value={episode}
-                      onChange={(event) => setEpisode(Math.max(1, Number(event.target.value) || 1))}
-                      min={1}
-                      type="number"
+                      onChange={(event) => changeEpisode(Number(event.target.value))}
                       className="control-field w-full"
-                    />
+                    >
+                      {episodeOptions.map((episodeNumber) => (
+                        <option key={episodeNumber} value={episodeNumber}>
+                          Episode {episodeNumber}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                 ) : null}
                 {detail.mediaType === "tv" ? (
