@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { ChevronRight, Heart, LoaderCircle, Play, Star, X } from "lucide-react";
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { GENRES, LANGUAGES, SERIES_GENRES } from "@/lib/genres";
 import type {
   BrowseCatalog,
@@ -37,8 +37,18 @@ export function CineVerseHome({
   );
   const [recommendations, setRecommendations] = useState(initialRecommendations);
   const [recommendationsLoading, setRecommendationsLoading] = useState(false);
+  const [trailerVisible, setTrailerVisible] = useState(false);
+  const trailerRevealTimer = useRef<number | null>(null);
   const hero = catalog.hero;
   const heroBackground = hero.backdropUrl ?? hero.posterUrl;
+
+  useEffect(() => {
+    return () => {
+      if (trailerRevealTimer.current) {
+        window.clearTimeout(trailerRevealTimer.current);
+      }
+    };
+  }, []);
 
   const sections = useMemo(() => {
     const result: HomeSection[] = [
@@ -100,28 +110,43 @@ export function CineVerseHome({
     }
   }
 
+  function revealTrailer() {
+    if (trailerRevealTimer.current) {
+      window.clearTimeout(trailerRevealTimer.current);
+    }
+    trailerRevealTimer.current = window.setTimeout(() => {
+      setTrailerVisible(true);
+    }, 3200);
+  }
+
   return (
     <main className="min-h-screen bg-[#050505] text-white">
       <SiteHeader />
 
       <section className="relative min-h-[82vh] overflow-hidden">
+        {heroBackground ? (
+          <img
+            src={heroBackground}
+            alt=""
+            className="absolute inset-0 h-full w-full object-cover brightness-90"
+          />
+        ) : (
+          <div className="poster-fallback absolute inset-0" />
+        )}
         {catalog.heroTrailerUrl ? (
           <iframe
             src={catalog.heroTrailerUrl}
             title={`Trailer ${hero.title}`}
             allow="autoplay; encrypted-media; picture-in-picture"
-            className="pointer-events-none absolute inset-0 h-full w-full scale-125 border-0 opacity-70"
+            tabIndex={-1}
+            aria-hidden="true"
+            onLoad={revealTrailer}
+            className={`pointer-events-none absolute inset-0 h-full w-full scale-125 border-0 transition-opacity duration-1000 ${
+              trailerVisible ? "opacity-90" : "opacity-0"
+            }`}
           />
-        ) : heroBackground ? (
-          <img
-            src={heroBackground}
-            alt=""
-            className="absolute inset-0 h-full w-full object-cover"
-          />
-        ) : (
-          <div className="poster-fallback absolute inset-0" />
-        )}
-        <div className="absolute inset-0 bg-[linear-gradient(90deg,#050505_0%,rgba(5,5,5,.82)_34%,rgba(5,5,5,.34)_70%),linear-gradient(0deg,#050505_0%,rgba(5,5,5,.1)_42%,rgba(5,5,5,.62)_100%)]" />
+        ) : null}
+        <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(5,5,5,.94)_0%,rgba(5,5,5,.62)_34%,rgba(5,5,5,.1)_72%),linear-gradient(0deg,#050505_0%,rgba(5,5,5,.04)_38%,rgba(5,5,5,.34)_100%)]" />
         <div className="relative z-10 mx-auto flex min-h-[82vh] max-w-7xl flex-col justify-end px-4 pb-16 pt-28 sm:px-6 lg:px-8">
           <div className="max-w-3xl">
             <div className="mb-4 flex items-center gap-3 text-sm font-semibold text-zinc-200">
