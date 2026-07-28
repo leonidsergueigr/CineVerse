@@ -39,6 +39,16 @@ type TmdbList = {
   total_results?: number;
 };
 
+type TmdbCredit = TmdbResult & {
+  job?: string;
+  department?: string;
+};
+
+type TmdbPersonCredits = {
+  cast?: TmdbCredit[];
+  crew?: TmdbCredit[];
+};
+
 type TmdbVideo = {
   key: string;
   site: string;
@@ -55,6 +65,10 @@ type TmdbDetails = TmdbResult & {
   runtime?: number;
   episode_run_time?: number[];
   genres?: Array<{ id: number; name: string }>;
+  created_by?: Array<{
+    id: number;
+    name: string;
+  }>;
   credits?: {
     cast?: Array<{
       id: number;
@@ -154,6 +168,10 @@ export async function discoverWithMeta(filters: CatalogFilters, withFallback = f
 
   const isAnime = filters.catalog === "anime";
   const mediaType = isAnime || filters.mediaType === "tv" ? "tv" : "movie";
+  if (filters.person) {
+    return getPersonCreditsWithMeta(filters, mediaType);
+  }
+
   const params: Record<string, string> = {
     sort_by: tmdbSort(filters.sort, mediaType),
     include_adult: "false",
@@ -171,9 +189,6 @@ export async function discoverWithMeta(filters: CatalogFilters, withFallback = f
   if (filters.minRating) params["vote_average.gte"] = filters.minRating;
   if (filters.originalLanguage && !isAnime) {
     params.with_original_language = filters.originalLanguage;
-  }
-  if (filters.person) {
-    params[mediaType === "tv" ? "with_people" : "with_cast"] = filters.person;
   }
   if (filters.sort === "rating") params["vote_count.gte"] = "80";
 
@@ -240,8 +255,13 @@ export async function getDetails(mediaType: MediaType, id: number): Promise<Medi
         character: person.character ?? "",
         profileUrl: posterUrl(person.profile_path ?? null, "w185"),
       })) ?? [],
-    crew:
-      data.credits?.crew
+    crew: uniqueCrew([
+      ...(data.created_by?.map((person) => ({
+        id: person.id,
+        name: person.name,
+        job: "Creator",
+      })) ?? []),
+      ...(data.credits?.crew
         ?.filter((person) =>
           mediaType === "movie"
             ? ["Director", "Writer", "Screenplay"].includes(person.job ?? "")
@@ -252,7 +272,8 @@ export async function getDetails(mediaType: MediaType, id: number): Promise<Medi
           id: person.id,
           name: person.name,
           job: person.job ?? "",
-        })) ?? [],
+        })) ?? []),
+    ]),
     seasons: data.seasons?.map((season) => ({
       id: season.id,
       name: season.name,
@@ -391,6 +412,76 @@ function normalizeMeta(data: TmdbList | null, forcedType?: MediaType, withFallba
   };
 }
 
+async function getPersonCreditsWithMeta(
+  filters: CatalogFilters,
+  mediaType: MediaType,
+) {
+  const personId = Number(filters.person);
+  if (!Number.isFinite(personId)) return emptyMeta();
+
+  const data = await tmdb<TmdbPersonCredits>(
+    `/person/${personId}/${mediaType === "movie" ? "movie_credits" : "tv_credits"}`,
+    {},
+  );
+  const role = filters.personRole === "crew" ? "crew" : "cast";
+  const requestedJob = filters.personJob?.toLocaleLowerCase("en");
+  const credits = role === "crew" ? data?.crew ?? [] : data?.cast ?? [];
+  const genre = genreForMediaType(filters.genre, mediaType);
+  const seen = new Set<number>();
+
+  const items = credits
+    .filter(
+      (credit) =>
+        role !== "crew" ||
+        !requestedJob ||
+        credit.job?.toLocaleLowerCase("en") === requestedJob,
+    )
+    .map((credit) => normalizeItem(credit, mediaType))
+    .filter((item): item is CatalogItem => Boolean(item))
+    .filter((item) => {
+      if (seen.has(item.id)) return false;
+      seen.add(item.id);
+      if (filters.catalog === "anime" && !isAnimeItem(item)) return false;
+      if (mediaType === "tv" && filters.catalog !== "anime" && isAnimeItem(item)) {
+        return false;
+      }
+      if (genre && !item.genreIds.includes(Number(genre))) return false;
+      if (
+        filters.originalLanguage &&
+        item.originalLanguage !== filters.originalLanguage
+      ) {
+        return false;
+      }
+      if (filters.minRating && item.voteAverage < Number(filters.minRating)) return false;
+
+      const year = Number(item.releaseDate?.slice(0, 4));
+      if (filters.yearFrom && (!year || year < Number(filters.yearFrom))) return false;
+      if (filters.yearTo && (!year || year > Number(filters.yearTo))) return false;
+      return true;
+    });
+
+  const sorted = sortCatalogItems(items, filters.sort ?? "new");
+  const requestedPage = Math.max(1, Number(normalizedPage(filters.page)));
+  const totalPages = Math.max(1, Math.ceil(sorted.length / 20));
+  const page = Math.min(requestedPage, totalPages);
+
+  return {
+    items: sorted.slice((page - 1) * 20, page * 20),
+    page,
+    totalPages,
+    totalResults: sorted.length,
+  };
+}
+
+function emptyMeta() {
+  return {
+    items: [] as CatalogItem[],
+    page: 1,
+    totalPages: 1,
+    totalResults: 0,
+  };
+}
+
 function normalizedPage(page?: string) {
   const value = Number(page);
   if (!Number.isFinite(value)) return "1";
@@ -441,6 +532,27 @@ function normalizeItem(result: TmdbResult, forcedType?: MediaType): CatalogItem 
 
 function isAnimeItem(item: CatalogItem) {
   return item.originalLanguage === "ja" && item.genreIds.includes(16);
+}
+
+function sortCatalogItems(items: CatalogItem[], sort?: string) {
+  return [...items].sort((a, b) => {
+    if (sort === "rating") return b.voteAverage - a.voteAverage;
+    if (sort === "az") return a.title.localeCompare(b.title, "fr");
+    if (sort === "new") {
+      return (b.releaseDate ?? "").localeCompare(a.releaseDate ?? "");
+    }
+    return b.popularity - a.popularity;
+  });
+}
+
+function uniqueCrew(crew: MediaDetails["crew"]) {
+  const seen = new Set<string>();
+  return crew.filter((person) => {
+    const key = `${person.id}-${person.job}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function isYoutubeTrailer(video: TmdbVideo) {

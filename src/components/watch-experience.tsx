@@ -199,6 +199,11 @@ export function WatchExperience({
     detail.mediaType === "tv" &&
     detail.originalLanguage === "ja" &&
     detail.genreIds.includes(16);
+  const featuredCrew = detail.crew.filter((person) =>
+    detail.mediaType === "movie"
+      ? person.job === "Director"
+      : person.job === "Creator",
+  );
 
   return (
     <main className="min-h-screen overflow-x-hidden bg-[#050505] pt-16 text-white">
@@ -286,6 +291,26 @@ export function WatchExperience({
                 <p className="mt-4 max-w-3xl text-sm leading-6 text-zinc-300 sm:text-base">
                   {detail.overview}
                 </p>
+                {featuredCrew.length ? (
+                  <div className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+                    <span className="font-bold text-zinc-500">
+                      {detail.mediaType === "movie"
+                        ? featuredCrew.length > 1
+                          ? "Réalisateurs"
+                          : "Réalisateur"
+                        : "Création"}
+                    </span>
+                    {featuredCrew.map((person) => (
+                      <Link
+                        key={`${person.id}-${person.job}`}
+                        href={personBrowseHref(detail, person.id, person.name, person.job, isAnime)}
+                        className="font-semibold text-zinc-200 transition hover:text-[#e50914]"
+                      >
+                        {person.name}
+                      </Link>
+                    ))}
+                  </div>
+                ) : null}
                 <div className="mt-5 flex flex-wrap gap-2">
                   {detail.genres.map((genre) => (
                     <Link
@@ -306,7 +331,13 @@ export function WatchExperience({
                       {detail.cast.map((person) => (
                         <Link
                           key={person.id}
-                          href={`/browse?type=${detail.mediaType}&person=${person.id}&personName=${encodeURIComponent(person.name)}`}
+                          href={personBrowseHref(
+                            detail,
+                            person.id,
+                            person.name,
+                            undefined,
+                            isAnime,
+                          )}
                           className="group w-[92px] shrink-0"
                         >
                           <div className="aspect-[3/4] overflow-hidden rounded bg-zinc-900 ring-1 ring-white/10">
@@ -447,6 +478,24 @@ function parseJson(value: string) {
   } catch {
     return null;
   }
+}
+
+function personBrowseHref(
+  detail: MediaDetails,
+  personId: number,
+  personName: string,
+  job: string | undefined,
+  isAnime: boolean,
+) {
+  const params = new URLSearchParams({
+    type: detail.mediaType,
+    person: String(personId),
+    personName,
+    personRole: job ? "crew" : "cast",
+  });
+  if (job) params.set("personJob", job);
+  if (isAnime) params.set("catalog", "anime");
+  return `/browse?${params.toString()}`;
 }
 
 function formatTime(seconds: number) {

@@ -22,6 +22,8 @@ export default async function BrowsePage({ searchParams }: PageProps) {
     originalLanguage: valueOf(params.originalLanguage),
     person: valueOf(params.person),
     personName: valueOf(params.personName),
+    personRole: valueOf(params.personRole),
+    personJob: valueOf(params.personJob),
     sort: valueOf(params.sort),
     page: valueOf(params.page),
   });

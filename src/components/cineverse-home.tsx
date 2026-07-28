@@ -490,6 +490,8 @@ function filterParams(filters: CatalogFilters) {
   if (filters.originalLanguage) params.set("originalLanguage", filters.originalLanguage);
   if (filters.person) params.set("person", filters.person);
   if (filters.personName) params.set("personName", filters.personName);
+  if (filters.personRole) params.set("personRole", filters.personRole);
+  if (filters.personJob) params.set("personJob", filters.personJob);
   if (filters.sort) params.set("sort", filters.sort);
   return params;
 }
@@ -531,9 +533,15 @@ function activeFilterLabels(filters: CatalogFilters) {
     });
   }
   if (filters.person) {
+    const personLabel =
+      filters.personRole === "crew"
+        ? filters.mediaType === "tv"
+          ? "Création"
+          : "Réalisation"
+        : "Casting";
     labels.push({
       key: "person",
-      label: `Casting : ${filters.personName ?? filters.person}`,
+      label: `${personLabel} : ${filters.personName ?? filters.person}`,
     });
   }
   if (filters.sort) {
@@ -562,7 +570,7 @@ function filterHrefWithout(filters: CatalogFilters, key: string) {
     year: ["yearFrom", "yearTo"],
     minRating: ["minRating"],
     originalLanguage: ["originalLanguage"],
-    person: ["person", "personName"],
+    person: ["person", "personName", "personRole", "personJob"],
     sort: ["sort"],
   };
   (queryKeys[key] ?? [key]).forEach((queryKey) => params.delete(queryKey));

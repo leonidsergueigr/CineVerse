@@ -63,6 +63,8 @@ export type CatalogFilters = {
   originalLanguage?: string;
   person?: string;
   personName?: string;
+  personRole?: string;
+  personJob?: string;
   sort?: string;
   page?: string;
 };
