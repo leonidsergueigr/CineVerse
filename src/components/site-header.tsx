@@ -4,7 +4,8 @@ import Link from "next/link";
 import { ChevronDown, Search } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { GENRES, LANGUAGES, SERIES_GENRES } from "@/lib/genres";
-import type { MediaType } from "@/lib/types";
+
+type MenuKind = "movie" | "tv" | "anime";
 
 type Props = {
   query?: string;
@@ -12,7 +13,7 @@ type Props = {
 };
 
 export function SiteHeader({ query, fixed = true }: Props) {
-  const [openMenu, setOpenMenu] = useState<MediaType | null>(null);
+  const [openMenu, setOpenMenu] = useState<MenuKind | null>(null);
   const headerRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -67,11 +68,18 @@ export function SiteHeader({ query, fixed = true }: Props) {
             open={openMenu === "tv"}
             onClick={() => setOpenMenu((current) => (current === "tv" ? null : "tv"))}
           />
+          <NavMenuButton
+            label="Animes"
+            open={openMenu === "anime"}
+            onClick={() =>
+              setOpenMenu((current) => (current === "anime" ? null : "anime"))
+            }
+          />
         </nav>
       </div>
 
       {openMenu ? (
-        <BrowseMenu mediaType={openMenu} onNavigate={() => setOpenMenu(null)} />
+        <BrowseMenu menu={openMenu} onNavigate={() => setOpenMenu(null)} />
       ) : null}
     </header>
   );
@@ -104,15 +112,20 @@ function NavMenuButton({
 }
 
 function BrowseMenu({
-  mediaType,
+  menu,
   onNavigate,
 }: {
-  mediaType: MediaType;
+  menu: MenuKind;
   onNavigate: () => void;
 }) {
+  const isAnime = menu === "anime";
+  const mediaType = menu === "movie" ? "movie" : "tv";
   const isMovie = mediaType === "movie";
-  const genres = isMovie ? GENRES : SERIES_GENRES;
-  const label = isMovie ? "films" : "series";
+  const genres = isMovie
+    ? GENRES
+    : SERIES_GENRES.filter((genre) => isAnime || genre.id !== 16);
+  const label = isAnime ? "animes" : isMovie ? "films" : "series";
+  const title = isAnime ? "Animes" : isMovie ? "Films" : "Series";
 
   return (
     <div className="absolute inset-x-0 top-full border-b border-white/10 bg-black/95 shadow-2xl">
@@ -120,11 +133,9 @@ function BrowseMenu({
         <div className="mb-4 flex items-center justify-between border-b border-white/10 pb-4">
           <div>
             <p className="text-xs font-bold uppercase text-zinc-500">Explorer</p>
-            <h2 className="mt-1 text-lg font-bold text-white">
-              {isMovie ? "Films" : "Series"}
-            </h2>
+            <h2 className="mt-1 text-lg font-bold text-white">{title}</h2>
           </div>
-          <MenuLink href={`/browse?type=${mediaType}`} onNavigate={onNavigate} prominent>
+          <MenuLink href={menuHref(menu)} onNavigate={onNavigate} prominent>
             Tous les {label}
           </MenuLink>
         </div>
@@ -135,7 +146,7 @@ function BrowseMenu({
               {genres.map((genre) => (
                 <MenuLink
                   key={genre.id}
-                  href={`/browse?type=${mediaType}&genre=${genre.id}`}
+                  href={menuHref(menu, { genre: String(genre.id) })}
                   onNavigate={onNavigate}
                 >
                   {genre.name}
@@ -144,45 +155,77 @@ function BrowseMenu({
             </div>
           </MenuColumn>
 
-          <MenuColumn title="Par langue">
-            <MenuLink href={`/browse?type=${mediaType}`} onNavigate={onNavigate}>
-              Toutes les langues
-            </MenuLink>
-            {LANGUAGES.map((language) => (
+          {isAnime ? (
+            <MenuColumn title="Catalogue">
+              <MenuLink href={menuHref(menu)} onNavigate={onNavigate}>
+                Tous les animes
+              </MenuLink>
               <MenuLink
-                key={language.id}
-                href={`/browse?type=${mediaType}&originalLanguage=${language.id}`}
+                href={menuHref(menu, { sort: "popular" })}
                 onNavigate={onNavigate}
               >
-                {language.name}
+                Les plus populaires
               </MenuLink>
-            ))}
-          </MenuColumn>
+              <MenuLink
+                href={menuHref(menu, { minRating: "8", sort: "rating" })}
+                onNavigate={onNavigate}
+              >
+                Les mieux notes
+              </MenuLink>
+              <MenuLink
+                href={menuHref(menu, { yearFrom: "2025", sort: "new" })}
+                onNavigate={onNavigate}
+              >
+                Nouveautes
+              </MenuLink>
+            </MenuColumn>
+          ) : (
+            <MenuColumn title="Par langue">
+              <MenuLink href={menuHref(menu)} onNavigate={onNavigate}>
+                Toutes les langues
+              </MenuLink>
+              {LANGUAGES.map((language) => (
+                <MenuLink
+                  key={language.id}
+                  href={menuHref(menu, { originalLanguage: language.id })}
+                  onNavigate={onNavigate}
+                >
+                  {language.name}
+                </MenuLink>
+              ))}
+            </MenuColumn>
+          )}
 
           <MenuColumn title="Selections">
             <MenuLink
-              href={`/browse?type=${mediaType}&minRating=8&sort=rating`}
+              href={menuHref(menu, { minRating: "8", sort: "rating" })}
               onNavigate={onNavigate}
             >
               Tres bien notes
             </MenuLink>
             <MenuLink
-              href={`/browse?type=${mediaType}&yearFrom=2026&yearTo=2026&sort=new`}
+              href={menuHref(menu, {
+                yearFrom: "2026",
+                yearTo: "2026",
+                sort: "new",
+              })}
               onNavigate={onNavigate}
             >
               Nouveautes 2026
             </MenuLink>
             <MenuLink
-              href={`/browse?type=${mediaType}&yearFrom=2025&yearTo=2025`}
+              href={menuHref(menu, { yearFrom: "2025", yearTo: "2025" })}
               onNavigate={onNavigate}
             >
               Sorties 2025
             </MenuLink>
             <MenuLink
-              href={`/browse?type=${mediaType}&genre=16`}
+              href={menuHref(menu, {
+                genre: isAnime ? "10759" : isMovie ? "16" : "10759",
+              })}
               onNavigate={onNavigate}
             >
-              Animation
+              {isAnime ? "Action & Aventure" : isMovie ? "Animation" : "Action & Aventure"}
             </MenuLink>
           </MenuColumn>
 
@@ -190,7 +233,10 @@ function BrowseMenu({
             {[2026, 2025, 2024, 2023, 2022, 2021].map((year) => (
               <MenuLink
                 key={year}
-                href={`/browse?type=${mediaType}&yearFrom=${year}&yearTo=${year}`}
+                href={menuHref(menu, {
+                  yearFrom: String(year),
+                  yearTo: String(year),
+                })}
                 onNavigate={onNavigate}
               >
                 {year}
@@ -201,6 +247,15 @@ function BrowseMenu({
       </div>
     </div>
   );
+}
+
+function menuHref(menu: MenuKind, values: Record<string, string> = {}) {
+  const params = new URLSearchParams({
+    type: menu === "movie" ? "movie" : "tv",
+  });
+  if (menu === "anime") params.set("catalog", "anime");
+  Object.entries(values).forEach(([key, value]) => params.set(key, value));
+  return `/browse?${params.toString()}`;
 }
 
 function MenuColumn({ title, children }: { title: string; children: React.ReactNode }) {

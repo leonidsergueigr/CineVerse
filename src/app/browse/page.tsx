@@ -13,6 +13,7 @@ export default async function BrowsePage({ searchParams }: PageProps) {
   const likes = getLikes();
   const catalog = await getBrowseCatalog({
     query: valueOf(params.q),
+    catalog: valueOf(params.catalog),
     mediaType: valueOf(params.type),
     genre: valueOf(params.genre),
     yearFrom: valueOf(params.yearFrom),

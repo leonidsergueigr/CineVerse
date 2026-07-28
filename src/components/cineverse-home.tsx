@@ -1,10 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { ChevronRight, Heart, LoaderCircle, Play, Star } from "lucide-react";
+import { ChevronRight, Heart, LoaderCircle, Play, Star, X } from "lucide-react";
 import { useMemo, useState, useTransition } from "react";
+import { GENRES, LANGUAGES, SERIES_GENRES } from "@/lib/genres";
 import type {
   BrowseCatalog,
+  CatalogFilters,
   CatalogItem,
   CatalogSection,
   HomeCatalog,
@@ -241,6 +243,7 @@ export function BrowseExperience({
       <SiteHeader query={catalog.filters.query} />
 
       <div id="catalog" className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
+        <ActiveFilters filters={catalog.filters} />
         <FilteredGrid
           items={catalog.items}
           liked={liked}
@@ -252,6 +255,36 @@ export function BrowseExperience({
         />
       </div>
     </main>
+  );
+}
+
+function ActiveFilters({ filters }: { filters: CatalogFilters }) {
+  const active = activeFilterLabels(filters);
+  if (!active.length) return null;
+
+  return (
+    <div className="mb-5 flex flex-wrap items-center gap-2">
+      <span className="mr-1 text-xs font-bold uppercase text-zinc-500">
+        Filtres actifs
+      </span>
+      {active.map((filter) => (
+        <Link
+          key={filter.key}
+          href={filterHrefWithout(filters, filter.key)}
+          className="inline-flex h-8 items-center gap-2 rounded border border-white/15 bg-white/[0.07] px-3 text-xs text-zinc-200 transition hover:border-[#e50914] hover:text-white"
+          title={`Retirer ${filter.label}`}
+        >
+          {filter.label}
+          <X className="h-3.5 w-3.5 text-zinc-500" />
+        </Link>
+      ))}
+      <Link
+        href="/browse"
+        className="ml-1 text-xs font-semibold text-zinc-500 transition hover:text-white"
+      >
+        Tout effacer
+      </Link>
+    </div>
   );
 }
 
@@ -439,8 +472,16 @@ function sortItems(items: CatalogItem[], sort: string) {
 }
 
 function pageHref(filters: BrowseCatalog["filters"], page: number) {
+  const params = filterParams(filters);
+  if (page > 1) params.set("page", String(page));
+  const query = params.toString();
+  return query ? `/browse?${query}` : "/browse";
+}
+
+function filterParams(filters: CatalogFilters) {
   const params = new URLSearchParams();
   if (filters.query) params.set("q", filters.query);
+  if (filters.catalog) params.set("catalog", filters.catalog);
   if (filters.mediaType) params.set("type", filters.mediaType);
   if (filters.genre) params.set("genre", filters.genre);
   if (filters.yearFrom) params.set("yearFrom", filters.yearFrom);
@@ -450,7 +491,82 @@ function pageHref(filters: BrowseCatalog["filters"], page: number) {
   if (filters.person) params.set("person", filters.person);
   if (filters.personName) params.set("personName", filters.personName);
   if (filters.sort) params.set("sort", filters.sort);
-  if (page > 1) params.set("page", String(page));
+  return params;
+}
+
+function activeFilterLabels(filters: CatalogFilters) {
+  const labels: Array<{ key: string; label: string }> = [];
+  if (filters.query) labels.push({ key: "query", label: `Recherche : ${filters.query}` });
+  if (filters.catalog === "anime") {
+    labels.push({ key: "catalog", label: "Catalogue : Animes" });
+  } else if (filters.mediaType) {
+    labels.push({
+      key: "mediaType",
+      label: filters.mediaType === "tv" ? "Series" : "Films",
+    });
+  }
+  if (filters.genre) {
+    const genres =
+      filters.catalog === "anime" || filters.mediaType === "tv"
+        ? SERIES_GENRES
+        : GENRES;
+    const genre = genres.find((item) => String(item.id) === filters.genre);
+    labels.push({ key: "genre", label: `Genre : ${genre?.name ?? filters.genre}` });
+  }
+  if (filters.yearFrom || filters.yearTo) {
+    const years =
+      filters.yearFrom === filters.yearTo
+        ? filters.yearFrom
+        : `${filters.yearFrom ?? "..."} - ${filters.yearTo ?? "..."}`;
+    labels.push({ key: "year", label: `Annee : ${years}` });
+  }
+  if (filters.minRating) {
+    labels.push({ key: "minRating", label: `Note : ${filters.minRating}+` });
+  }
+  if (filters.originalLanguage) {
+    const language = LANGUAGES.find((item) => item.id === filters.originalLanguage);
+    labels.push({
+      key: "originalLanguage",
+      label: `Langue : ${language?.name ?? filters.originalLanguage}`,
+    });
+  }
+  if (filters.person) {
+    labels.push({
+      key: "person",
+      label: `Casting : ${filters.personName ?? filters.person}`,
+    });
+  }
+  if (filters.sort) {
+    const sortLabels: Record<string, string> = {
+      new: "Nouveautes",
+      rating: "Les mieux notes",
+      popular: "Les plus regardes",
+      az: "A-Z",
+      type: "Type",
+    };
+    labels.push({
+      key: "sort",
+      label: `Tri : ${sortLabels[filters.sort] ?? filters.sort}`,
+    });
+  }
+  return labels;
+}
+
+function filterHrefWithout(filters: CatalogFilters, key: string) {
+  const params = filterParams(filters);
+  const queryKeys: Record<string, string[]> = {
+    query: ["q"],
+    catalog: ["catalog"],
+    mediaType: ["type", "catalog", "genre"],
+    genre: ["genre"],
+    year: ["yearFrom", "yearTo"],
+    minRating: ["minRating"],
+    originalLanguage: ["originalLanguage"],
+    person: ["person", "personName"],
+    sort: ["sort"],
+  };
+  (queryKeys[key] ?? [key]).forEach((queryKey) => params.delete(queryKey));
+  params.delete("page");
   const query = params.toString();
   return query ? `/browse?${query}` : "/browse";
 }

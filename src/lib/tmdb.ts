@@ -77,9 +77,14 @@ type TmdbDetails = TmdbResult & {
 };
 
 export async function getHomeCatalog(): Promise<HomeCatalog> {
-  const [trendingMovies, trendingTv, mood] = await Promise.all([
+  const [trendingMovies, trendingTv, anime, mood] = await Promise.all([
     getTrending("movie"),
     getTrending("tv"),
+    discover({
+      catalog: "anime",
+      mediaType: "tv",
+      sort: "popular",
+    }),
     discover(
       {
         mediaType: "movie",
@@ -92,7 +97,12 @@ export async function getHomeCatalog(): Promise<HomeCatalog> {
 
   const sections = [
     { id: "movies", title: "Films tendance", items: trendingMovies },
-    { id: "series", title: "Series a devorer", items: trendingTv },
+    {
+      id: "series",
+      title: "Series a devorer",
+      items: trendingTv.filter((item) => !item.genreIds.includes(16)),
+    },
+    { id: "anime", title: "Animes du moment", items: anime },
     { id: "mood", title: "Soiree science-fiction", items: mood },
   ];
   const hero = trendingMovies[0] ?? fallbackCatalog()[0];
@@ -142,7 +152,8 @@ export async function discoverWithMeta(filters: CatalogFilters, withFallback = f
     return searchWithMeta(filters.query, filters.mediaType, filters.page, withFallback);
   }
 
-  const mediaType = filters.mediaType === "tv" ? "tv" : "movie";
+  const isAnime = filters.catalog === "anime";
+  const mediaType = isAnime || filters.mediaType === "tv" ? "tv" : "movie";
   const params: Record<string, string> = {
     sort_by: tmdbSort(filters.sort, mediaType),
     include_adult: "false",
@@ -150,9 +161,17 @@ export async function discoverWithMeta(filters: CatalogFilters, withFallback = f
   };
 
   const genre = genreForMediaType(filters.genre, mediaType);
-  if (genre) params.with_genres = genre;
+  if (isAnime) {
+    params.with_genres = genre && genre !== "16" ? `16,${genre}` : "16";
+    params.with_original_language = "ja";
+  } else {
+    if (genre) params.with_genres = genre;
+    if (mediaType === "tv" && !genre) params.without_genres = "16";
+  }
   if (filters.minRating) params["vote_average.gte"] = filters.minRating;
-  if (filters.originalLanguage) params.with_original_language = filters.originalLanguage;
+  if (filters.originalLanguage && !isAnime) {
+    params.with_original_language = filters.originalLanguage;
+  }
   if (filters.person) {
     params[mediaType === "tv" ? "with_people" : "with_cast"] = filters.person;
   }

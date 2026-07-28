@@ -53,6 +53,7 @@ export type BrowseCatalog = {
 
 export type CatalogFilters = {
   query?: string;
+  catalog?: string;
   mediaType?: string;
   genre?: string;
   yearFrom?: string;
