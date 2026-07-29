@@ -558,6 +558,8 @@ export function WatchExperience({
                 src={iframeUrl}
                 allow="autoplay; fullscreen; picture-in-picture"
                 allowFullScreen
+                referrerPolicy="no-referrer"
+                sandbox="allow-presentation allow-same-origin allow-scripts"
                 onLoad={() => setPlayerLoadToken((value) => value + 1)}
                 className="h-full min-h-[42svh] w-full border-0 sm:min-h-[55vh]"
                 title={`Lecteur ${detail.title}`}

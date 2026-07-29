@@ -91,7 +91,17 @@ async function checkAvailability(
     });
     if (!response.ok) return null;
 
-    const data = (await response.json()) as AvailabilityResponse;
+    const data = normalizeAvailabilityResponse(await response.json());
+    if (!data) {
+      console.warn(
+        "[provider-availability]",
+        JSON.stringify({
+          providerId: provider.id,
+          code: "INVALID_PAYLOAD",
+        }),
+      );
+      return cached?.value ?? null;
+    }
     if (data.available === false) {
       setCachedApiResponse(cacheKey, false, 10 * 60);
       return false;
@@ -124,6 +134,52 @@ function matchesMediaType(detectedType: string | undefined, mediaType: MediaType
   return ["tv", "serie", "series", "show"].includes(normalized);
 }
 
+function normalizeAvailabilityResponse(
+  value: unknown,
+): AvailabilityResponse | null {
+  if (!isRecord(value)) return null;
+  if (
+    value.available !== undefined &&
+    typeof value.available !== "boolean"
+  ) {
+    return null;
+  }
+  if (
+    value.detectedType !== undefined &&
+    typeof value.detectedType !== "string"
+  ) {
+    return null;
+  }
+  if (value.title !== undefined && typeof value.title !== "string") {
+    return null;
+  }
+  if (
+    value.year !== undefined &&
+    (typeof value.year !== "number" || !Number.isFinite(value.year))
+  ) {
+    return null;
+  }
+  if (value.poster !== undefined && typeof value.poster !== "string") {
+    return null;
+  }
+  if (
+    value.languages !== undefined &&
+    (!Array.isArray(value.languages) ||
+      value.languages.some((language) => typeof language !== "string"))
+  ) {
+    return null;
+  }
+
+  return {
+    available: value.available,
+    detectedType: value.detectedType,
+    title: value.title,
+    year: value.year,
+    poster: value.poster,
+    languages: value.languages as string[] | undefined,
+  };
+}
+
 function toLanguageOption(language: string) {
   const id = language.trim().toLowerCase();
   const labels: Record<string, string> = {
@@ -142,4 +198,8 @@ function isHttpUrl(value: string | undefined) {
   } catch {
     return false;
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

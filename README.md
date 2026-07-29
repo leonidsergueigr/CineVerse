@@ -121,8 +121,10 @@ notes, synopsis, genres, credits et filtres.
 
 Le domaine courant et le HTML des catalogues sont gardes 30 minutes. Les
 recherches TMDB sont gardees 24 heures. `FSTREAM_BASE_URL` peut forcer
-temporairement un domaine en cas de panne de la page d'annonce; l'ancienne
-variable `FS16_BASE_URL` ne sert plus que de dernier secours.
+temporairement un domaine en cas de panne de la page d'annonce. Par securite,
+la decouverte accepte uniquement les origines HTTPS `fs<number>.lol`. Si le
+domaine officiel change de suffixe, ajoute son origine exacte dans
+`FSTREAM_ALLOWED_ORIGINS`, puis redemarre CineVerse.
 
 Le bloc `Pour vous` combine les recommandations et titres similaires TMDB avec
 les genres, langues, notes et popularite. Un dislike exclut toujours le titre
@@ -131,12 +133,36 @@ ne pas sur-apprendre a partir d'un seul avis.
 
 ## Sources video
 
-Quand une fiche FStream correspond exactement au type et a l'identifiant TMDB,
-CineVerse propose automatiquement les lecteurs Uqload, Voe, Dood, Filmoon et
-Netu presents dans la version demandee. Pour un film, la VF francaise est
-prioritaire, puis la VFQ et la version par defaut. Pour une serie, le lien est
-resolu pour la saison et l'episode selectionnes. Les lecteurs et langues absents
-ne sont pas proposes.
+TMDB fournit le catalogue et les metadonnees. Fstream est un adaptateur de
+source qui cherche une fiche correspondante et retourne des candidats de
+lecture. Uqload, Voe, Dood, Filmoon et Netu sont des hebergeurs, pas cinq
+sources independantes: si Fstream tombe, ces candidats ne peuvent plus etre
+renouveles, mais le cache perime et les providers configures separement restent
+disponibles.
+
+Chaque candidat conserve sa source, son hebergeur, sa langue audio, ses
+sous-titres, sa saison, son episode, ses capacites et un score de fiabilite.
+Pour les films, VFF et VFQ restent distinctes; VOSTFR represente une piste
+originale avec sous-titres francais. Pour une serie, le lien est resolu pour la
+saison et l'episode selectionnes. Les lecteurs et langues absents ne sont pas
+proposes.
+
+Le `StreamResolver` interroge les adaptateurs de sources independamment,
+ignore proprement une source en echec, puis regroupe et classe leurs candidats.
+Ajouter une deuxieme source ne demande donc pas de modifier l'adaptateur
+Fstream ni le registre des hebergeurs.
+
+Les JSON distants sont valides a l'execution. Une URL de lecteur est acceptee
+uniquement si son domaine et son chemin correspondent au registre de
+l'hebergeur annonce. Pour approuver temporairement un nouveau domaine sans
+modifier le code, utilise une valeur JSON sur une seule ligne:
+
+```dotenv
+CINEVERSE_PLAYER_HOST_ALLOWLIST_JSON={"voe":["nouveau-domaine.example"]}
+```
+
+Cette extension est volontairement explicite. Elle ajoute aussi l'origine a la
+politique CSP des iframes et necessite un redemarrage de l'application.
 
 Les correspondances FStream/TMDB sont gardees sept jours et les liens lecteurs
 15 a 30 minutes dans SQLite. Cela limite les requetes sans conserver les flux

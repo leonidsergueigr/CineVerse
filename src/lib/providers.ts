@@ -4,10 +4,15 @@ export function getEmbedProviders(): EmbedProvider[] {
   const raw = process.env.CINEVERSE_EMBED_PROVIDERS_JSON;
   if (raw) {
     try {
-      const providers = JSON.parse(raw) as EmbedProvider[];
-      return providers
-        .filter((provider) => provider.id && provider.name && provider.template)
-        .sort((a, b) => a.priority - b.priority);
+      const parsed: unknown = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return demoProviders();
+      const providers = parsed.flatMap((value) => {
+        const provider = normalizeEmbedProvider(value);
+        return provider ? [provider] : [];
+      });
+      return providers.length
+        ? providers.sort((a, b) => a.priority - b.priority)
+        : demoProviders();
     } catch {
       return demoProviders();
     }
@@ -83,6 +88,69 @@ function appendOption(url: string, option: string) {
   if (!clean.startsWith("?") && !clean.startsWith("&")) return `${url}${clean}`;
   const separator = url.includes("?") ? "&" : "?";
   return `${url}${separator}${clean.replace(/^[?&]/, "")}`;
+}
+
+function normalizeEmbedProvider(value: unknown): EmbedProvider | null {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    !value.id.trim() ||
+    typeof value.name !== "string" ||
+    !value.name.trim() ||
+    typeof value.template !== "string" ||
+    !value.template.trim()
+  ) {
+    return null;
+  }
+
+  const languages = Array.isArray(value.languages)
+    ? value.languages.flatMap((language) => {
+        if (
+          !isRecord(language) ||
+          typeof language.id !== "string" ||
+          !language.id.trim() ||
+          typeof language.label !== "string" ||
+          !language.label.trim()
+        ) {
+          return [];
+        }
+        return [{ id: language.id.trim(), label: language.label.trim() }];
+      })
+    : undefined;
+  const customizationOptions = isRecord(value.customizationOptions)
+    ? Object.fromEntries(
+        Object.entries(value.customizationOptions).filter(
+          (entry): entry is [string, string] =>
+            typeof entry[1] === "string",
+        ),
+      )
+    : undefined;
+
+  return {
+    id: value.id.trim(),
+    name: value.name.trim(),
+    template: value.template.trim(),
+    availabilityApi:
+      typeof value.availabilityApi === "string" &&
+      value.availabilityApi.trim()
+        ? value.availabilityApi.trim()
+        : undefined,
+    supportsTracking: value.supportsTracking === true,
+    supportsLanguage: value.supportsLanguage !== false,
+    priority:
+      typeof value.priority === "number" && Number.isFinite(value.priority)
+        ? value.priority
+        : 100,
+    languages: languages?.length ? languages : undefined,
+    customizationOptions:
+      customizationOptions && Object.keys(customizationOptions).length
+        ? customizationOptions
+        : undefined,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function demoProviders(): EmbedProvider[] {

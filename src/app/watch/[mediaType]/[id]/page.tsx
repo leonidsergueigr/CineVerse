@@ -4,8 +4,9 @@ import {
   applyProviderMetadata,
   resolveProvidersForMedia,
 } from "@/lib/provider-availability";
-import { getFstreamProviders } from "@/lib/fstream";
+import { fstreamSourceAdapter } from "@/lib/fstream";
 import { getEmbedProviders } from "@/lib/providers";
+import { resolveStreamProviders } from "@/lib/stream-resolver";
 import {
   getProgress,
   getSeriesProgressSummary,
@@ -51,10 +52,17 @@ export default async function WatchPage({ params, searchParams }: PageProps) {
     mediaType === "tv"
       ? Math.min(maxEpisode, Math.max(1, requestedEpisode || 1))
       : null;
-  const fstreamProviders = await getFstreamProviders(detail, season, episode);
+  const sourceProviders = await resolveStreamProviders(
+    [fstreamSourceAdapter],
+    {
+      detail,
+      seasonNumber: season,
+      episodeNumber: episode,
+    },
+  );
   const providers = [
     ...providerResolution.providers,
-    ...fstreamProviders,
+    ...sourceProviders,
   ].sort((left, right) => left.priority - right.priority);
   const progress = getProgress(id, mediaType, season, episode);
   const [episodeInfo, seriesProgress] =

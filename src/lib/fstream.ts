@@ -2,28 +2,24 @@ import "server-only";
 
 import { load } from "cheerio";
 import { getCachedApiResponse, setCachedApiResponse } from "@/lib/store";
-import type { EmbedProvider, MediaDetails, MediaType } from "@/lib/types";
+import {
+  createStreamCandidate,
+  isPlayerHostId,
+  isStreamLanguageId,
+  normalizeCachedStreamCandidates,
+  PLAYER_HOST_IDS,
+  PLAYER_HOST_REGISTRY,
+  type PlayerHostId,
+  type StreamCandidate,
+  type StreamLanguageId,
+  type StreamSourceAdapter,
+} from "@/lib/streaming";
+import type { MediaDetails, MediaType } from "@/lib/types";
 
 const FSTREAM_INDEX_URL = "https://fstream.info/";
 const FALLBACK_FSTREAM_URL = "https://fs16.lol";
-const PROVIDER_HOSTS = [
-  "uqload",
-  "voe",
-  "dood",
-  "filmoon",
-  "netu",
-] as const;
-const LANGUAGES = ["vf", "vostfr", "vo"] as const;
-const PROVIDER_NAMES: Record<ProviderHost, string> = {
-  uqload: "Uqload",
-  voe: "Voe",
-  dood: "Dood",
-  filmoon: "Filmoon",
-  netu: "Netu",
-};
-
-type ProviderHost = (typeof PROVIDER_HOSTS)[number];
-type ProviderLanguage = (typeof LANGUAGES)[number];
+const SERIES_LANGUAGES = ["vf", "vostfr", "vo"] as const;
+const SOURCE_ID = "fstream";
 
 type FstreamSource = {
   newsId: string;
@@ -36,13 +32,8 @@ type SearchCandidate = FstreamSource & {
   year: number | null;
 };
 
-type StreamSet = Record<
-  ProviderHost,
-  Partial<Record<ProviderLanguage, string>>
->;
-
 type MoviePlayers = {
-  players?: Record<
+  players: Record<
     string,
     {
       default?: string;
@@ -51,15 +42,15 @@ type MoviePlayers = {
       vfq?: string;
     }
   >;
-  meta?: {
+  meta: {
     tagz?: string;
   };
 };
 
 type SeriesPlayers = {
-  vf?: Record<string, Record<string, string>>;
-  vostfr?: Record<string, Record<string, string>>;
-  vo?: Record<string, Record<string, string>>;
+  vf: Record<string, Record<string, string>>;
+  vostfr: Record<string, Record<string, string>>;
+  vo: Record<string, Record<string, string>>;
 };
 
 type ResourceOptions = {
@@ -71,15 +62,20 @@ type ResourceOptions = {
 };
 
 export async function getFstreamBaseUrl(forceRefresh = false) {
-  const override = normalizedOrigin(process.env.FSTREAM_BASE_URL);
+  const override = normalizedFstreamOrigin(process.env.FSTREAM_BASE_URL);
   if (override) return override;
 
   const indexUrl =
-    normalizedHttpUrl(process.env.FSTREAM_INDEX_URL) ?? FSTREAM_INDEX_URL;
+    normalizedSecureHttpUrl(process.env.FSTREAM_INDEX_URL) ??
+    FSTREAM_INDEX_URL;
   const cacheKey = `source:fstream:domain:${indexUrl}`;
   const cached = getCachedApiResponse<string>(cacheKey);
-  if (!forceRefresh && cached && !cached.stale) return cached.value;
+  const cachedOrigin = normalizedFstreamOrigin(cached?.value);
+  if (!forceRefresh && cachedOrigin && cached && !cached.stale) {
+    return cachedOrigin;
+  }
 
+  const startedAt = Date.now();
   try {
     const response = await fetch(indexUrl, {
       cache: "no-store",
@@ -95,14 +91,30 @@ export async function getFstreamBaseUrl(forceRefresh = false) {
         setCachedApiResponse(cacheKey, currentUrl, 30 * 60);
         return currentUrl;
       }
+      reportFstreamIssue("DOMAIN_UNAVAILABLE", {
+        operation: "discover-domain",
+        status: response.status,
+        durationMs: Date.now() - startedAt,
+      });
+    } else {
+      reportFstreamIssue(httpErrorCode(response.status), {
+        operation: "discover-domain",
+        status: response.status,
+        durationMs: Date.now() - startedAt,
+      });
     }
-  } catch {
+  } catch (error) {
+    reportFstreamIssue(requestErrorCode(error), {
+      operation: "discover-domain",
+      durationMs: Date.now() - startedAt,
+    });
     // A stale domain remains useful when the landing page is temporarily down.
   }
 
-  if (cached?.value) return cached.value;
+  if (cachedOrigin) return cachedOrigin;
   return (
-    normalizedOrigin(process.env.FS16_BASE_URL) ?? FALLBACK_FSTREAM_URL
+    normalizedFstreamOrigin(process.env.FS16_BASE_URL) ??
+    FALLBACK_FSTREAM_URL
   );
 }
 
@@ -138,74 +150,71 @@ export function rememberFstreamCatalogMatch(
   );
 }
 
-export async function getFstreamProviders(
-  detail: MediaDetails,
-  seasonNumber: number | null,
-  episodeNumber: number | null,
-) {
-  const streams = await resolveFstreamStreams(
-    detail,
-    seasonNumber,
-    episodeNumber,
-  );
-  if (!streams) return [];
-
-  return PROVIDER_HOSTS.flatMap((host, index) => {
-    const languages = LANGUAGES.filter((language) =>
-      Boolean(streams[host]?.[language]),
+export const fstreamSourceAdapter: StreamSourceAdapter = {
+  id: SOURCE_ID,
+  providerTemplate(hostId) {
+    return (
+      `/api/fstream-player?host=${hostId}` +
+      "&tmdbId={tmdbId}&mediaType={tmdbMediaType}" +
+      "&season={season}&episode={episode}&language={language}" +
+      "&autoplay={autoplay}"
     );
-    if (!languages.length) return [];
-
-    return [
-      {
-        id: `fstream-${host}`,
-        name: PROVIDER_NAMES[host],
-        template:
-          `/api/fstream-player?host=${host}` +
-          "&tmdbId={tmdbId}&mediaType={tmdbMediaType}" +
-          "&season={season}&episode={episode}&language={language}" +
-          "&autoplay={autoplay}",
-        supportsTracking: false,
-        supportsLanguage: true,
-        priority: 20 + index,
-        languages: languages.map(toLanguageOption),
-      } satisfies EmbedProvider,
-    ];
-  });
-}
+  },
+  async resolve({ detail, seasonNumber, episodeNumber }) {
+    return (
+      (await resolveFstreamCandidates(
+        detail,
+        seasonNumber,
+        episodeNumber,
+      )) ?? []
+    );
+  },
+};
 
 export async function getFstreamEmbedUrl(
   detail: MediaDetails,
-  host: ProviderHost,
-  language: ProviderLanguage,
+  host: PlayerHostId,
+  language: StreamLanguageId,
   seasonNumber: number | null,
   episodeNumber: number | null,
 ) {
-  const streams = await resolveFstreamStreams(
+  const candidates = await resolveFstreamCandidates(
     detail,
     seasonNumber,
     episodeNumber,
   );
-  return streams?.[host]?.[language] ?? null;
+  if (!candidates) return null;
+
+  const preferredLanguages: StreamLanguageId[] =
+    language === "vf"
+      ? ["vf", "vff", "vfq"]
+      : [language];
+  return (
+    candidates.find(
+      (candidate) =>
+        candidate.hostId === host &&
+        preferredLanguages.includes(candidate.languageId),
+    )?.embedUrl ?? null
+  );
 }
 
 export function isFstreamProviderHost(
   value: string | null,
-): value is ProviderHost {
-  return PROVIDER_HOSTS.includes(value as ProviderHost);
+): value is PlayerHostId {
+  return isPlayerHostId(value);
 }
 
 export function isFstreamLanguage(
   value: string | null,
-): value is ProviderLanguage {
-  return LANGUAGES.includes(value as ProviderLanguage);
+): value is StreamLanguageId {
+  return isStreamLanguageId(value);
 }
 
-export function getFstreamProviderName(host: ProviderHost) {
-  return PROVIDER_NAMES[host];
+export function getFstreamProviderName(host: PlayerHostId) {
+  return PLAYER_HOST_REGISTRY[host].name;
 }
 
-async function resolveFstreamStreams(
+async function resolveFstreamCandidates(
   detail: MediaDetails,
   seasonNumber: number | null,
   episodeNumber: number | null,
@@ -213,14 +222,22 @@ async function resolveFstreamStreams(
   const season = detail.mediaType === "tv" ? seasonNumber ?? 1 : null;
   const episode = detail.mediaType === "tv" ? episodeNumber ?? 1 : null;
   const streamCacheKey = [
-    "source:fstream:streams:v2",
+    "source:fstream:streams:v3",
     detail.mediaType,
     detail.id,
     season ?? 0,
     episode ?? 0,
   ].join(":");
-  const cached = getCachedApiResponse<StreamSet | false>(streamCacheKey);
-  if (cached && !cached.stale) return cached.value || null;
+  const cached = getCachedApiResponse<unknown>(streamCacheKey);
+  if (cached && !cached.stale) {
+    if (cached.value === false) return null;
+    const normalized = normalizeCachedStreamCandidates(cached.value);
+    if (normalized) return normalized;
+    reportFstreamIssue("INVALID_PAYLOAD", {
+      operation: "stream-cache",
+      mediaType: detail.mediaType,
+    });
+  }
 
   const source = await resolveFstreamSource(detail, season);
   if (!source) {
@@ -228,17 +245,26 @@ async function resolveFstreamStreams(
     return null;
   }
 
-  const streams =
+  const candidates =
     detail.mediaType === "movie"
-      ? await getMovieStreams(detail.id, source.newsId)
-      : await getSeriesStreams(source.newsId, episode ?? 1);
-  if (!streams || !hasStreams(streams)) {
+      ? await getMovieCandidates(detail, source.newsId)
+      : await getSeriesCandidates(
+          detail,
+          source.newsId,
+          season ?? 1,
+          episode ?? 1,
+        );
+  if (!candidates?.length) {
+    reportFstreamIssue("NO_STREAM", {
+      operation: "resolve-streams",
+      mediaType: detail.mediaType,
+    });
     setCachedApiResponse(streamCacheKey, false, 10 * 60);
     return null;
   }
 
-  setCachedApiResponse(streamCacheKey, streams, 30 * 60);
-  return streams;
+  setCachedApiResponse(streamCacheKey, candidates, 30 * 60);
+  return candidates;
 }
 
 async function resolveFstreamSource(
@@ -246,18 +272,20 @@ async function resolveFstreamSource(
   seasonNumber: number | null,
 ) {
   const cacheKey = sourceKey(detail.mediaType, detail.id, seasonNumber);
-  const cached = getCachedApiResponse<FstreamSource>(cacheKey);
-  if (cached && !cached.stale) return cached.value;
+  const cached = getCachedApiResponse<unknown>(cacheKey);
+  const cachedSource = normalizeFstreamSource(cached?.value);
+  if (cachedSource && cached && !cached.stale) return cachedSource;
 
-  const hint = getCachedApiResponse<FstreamSource>(
+  const hint = getCachedApiResponse<unknown>(
     sourceHintKey(detail.mediaType, detail.id, seasonNumber),
   );
+  const hintedSource = normalizeFstreamSource(hint?.value);
   if (
-    hint?.value &&
-    (await sourceMatchesTmdb(detail, hint.value.newsId))
+    hintedSource &&
+    (await sourceMatchesTmdb(detail, hintedSource.newsId))
   ) {
-    setCachedApiResponse(cacheKey, hint.value, 7 * 24 * 60 * 60);
-    return hint.value;
+    setCachedApiResponse(cacheKey, hintedSource, 7 * 24 * 60 * 60);
+    return hintedSource;
   }
 
   const candidates = await searchFstream(detail.title);
@@ -273,17 +301,40 @@ async function resolveFstreamSource(
     )
     .slice(0, 8);
 
-  for (const candidate of ranked) {
-    if (await sourceMatchesTmdb(detail, candidate.newsId)) {
-      const source = {
-        newsId: candidate.newsId,
-        seasonNumber: candidate.seasonNumber,
-      };
-      setCachedApiResponse(cacheKey, source, 7 * 24 * 60 * 60);
-      return source;
-    }
+  const match = await findFirstMatchingSource(detail, ranked, 3);
+  if (match) {
+    const source = {
+      newsId: match.newsId,
+      seasonNumber: match.seasonNumber,
+    };
+    setCachedApiResponse(cacheKey, source, 7 * 24 * 60 * 60);
+    return source;
   }
 
+  reportFstreamIssue("TMDB_MISMATCH", {
+    operation: "match-source",
+    mediaType: detail.mediaType,
+    candidateCount: ranked.length,
+  });
+  return null;
+}
+
+async function findFirstMatchingSource(
+  detail: MediaDetails,
+  candidates: SearchCandidate[],
+  concurrency: number,
+) {
+  const batchSize = Math.max(1, concurrency);
+  for (let index = 0; index < candidates.length; index += batchSize) {
+    const batch = candidates.slice(index, index + batchSize);
+    const matches = await Promise.all(
+      batch.map((candidate) =>
+        sourceMatchesTmdb(detail, candidate.newsId),
+      ),
+    );
+    const matchIndex = matches.findIndex(Boolean);
+    if (matchIndex >= 0) return batch[matchIndex];
+  }
   return null;
 }
 
@@ -296,7 +347,12 @@ async function searchFstream(query: string) {
     body: new URLSearchParams({ query, page: "1" }).toString(),
     contentType: "application/x-www-form-urlencoded; charset=UTF-8",
   });
-  if (!html) return [];
+  if (!html) {
+    reportFstreamIssue("SEARCH_FAILED", {
+      operation: "search",
+    });
+    return [];
+  }
 
   const $ = load(html);
   const candidates: SearchCandidate[] = [];
@@ -339,23 +395,59 @@ async function sourceMatchesTmdb(detail: MediaDetails, newsId: string) {
   return Boolean(html?.match(new RegExp(`\\bs-${detail.id}\\b`)));
 }
 
-async function getMovieStreams(tmdbId: number, newsId: string) {
+async function getMovieCandidates(detail: MediaDetails, newsId: string) {
   const payload = await fetchMoviePayload(newsId);
-  if (payload?.meta?.tagz !== `f-${tmdbId}`) return null;
+  if (payload?.meta?.tagz !== `f-${detail.id}`) return null;
 
-  return PROVIDER_HOSTS.reduce<StreamSet>(
-    (streams, host) => {
+  const candidates: StreamCandidate[] = [];
+  for (const host of PLAYER_HOST_IDS) {
       const source = payload.players?.[host];
-      if (!source) return streams;
+    if (!source) continue;
 
-      const vf = firstHttpUrl(source.vff, source.vfq, source.default);
-      const vostfr = firstHttpUrl(source.vostfr);
-      if (vf) streams[host].vf = vf;
-      if (vostfr) streams[host].vostfr = vostfr;
-      return streams;
-    },
-    emptyStreamSet(),
-  );
+    pushCandidate(candidates, {
+      hostId: host,
+      embedUrl: source.vff,
+      languageId: "vff",
+      audioLanguage: "fr-FR",
+      subtitleLanguage: null,
+      season: null,
+      episode: null,
+    });
+    pushCandidate(candidates, {
+      hostId: host,
+      embedUrl: source.vfq,
+      languageId: "vfq",
+      audioLanguage: "fr-CA",
+      subtitleLanguage: null,
+      season: null,
+      episode: null,
+    });
+    pushCandidate(candidates, {
+      hostId: host,
+      embedUrl: source.vostfr,
+      languageId: "vostfr",
+      audioLanguage: detail.originalLanguage || "und",
+      subtitleLanguage: "fr",
+      season: null,
+      episode: null,
+    });
+
+    if (
+      source.default &&
+      ![source.vff, source.vfq, source.vostfr].includes(source.default)
+    ) {
+      pushCandidate(candidates, {
+        hostId: host,
+        embedUrl: source.default,
+        languageId: "vf",
+        audioLanguage: "fr",
+        subtitleLanguage: null,
+        season: null,
+        episode: null,
+      });
+    }
+  }
+  return candidates;
 }
 
 async function fetchMoviePayload(newsId: string) {
@@ -366,10 +458,15 @@ async function fetchMoviePayload(newsId: string) {
       ttlSeconds: 30 * 60,
     },
   );
-  return parseJson<MoviePlayers>(raw);
+  return parseMoviePlayers(raw);
 }
 
-async function getSeriesStreams(newsId: string, episodeNumber: number) {
+async function getSeriesCandidates(
+  detail: MediaDetails,
+  newsId: string,
+  seasonNumber: number,
+  episodeNumber: number,
+) {
   const raw = await fetchFstreamResource(
     `/static/series/${encodeURIComponent(newsId)}.js`,
     {
@@ -377,27 +474,36 @@ async function getSeriesStreams(newsId: string, episodeNumber: number) {
       ttlSeconds: 15 * 60,
     },
   );
-  const payload = parseJson<SeriesPlayers>(raw);
+  const payload = parseSeriesPlayers(raw);
   if (!payload) return null;
 
-  return PROVIDER_HOSTS.reduce<StreamSet>(
-    (streams, host) => {
-      for (const language of LANGUAGES) {
-        const url = firstHttpUrl(
-          payload[language]?.[String(episodeNumber)]?.[host],
-        );
-        if (url) streams[host][language] = url;
-      }
-      return streams;
-    },
-    emptyStreamSet(),
-  );
+  const candidates: StreamCandidate[] = [];
+  for (const host of PLAYER_HOST_IDS) {
+    for (const language of SERIES_LANGUAGES) {
+      const embedUrl = payload[language][String(episodeNumber)]?.[host];
+      pushCandidate(candidates, {
+        hostId: host,
+        embedUrl,
+        languageId: language,
+        audioLanguage:
+          language === "vf"
+            ? "fr"
+            : detail.originalLanguage || "und",
+        subtitleLanguage: language === "vostfr" ? "fr" : null,
+        season: seasonNumber,
+        episode: episodeNumber,
+      });
+    }
+  }
+  return candidates;
 }
 
 async function fetchFstreamResource(path: string, options: ResourceOptions) {
   const cacheKey = `source:fstream:${options.cacheKey}`;
-  const cached = getCachedApiResponse<string>(cacheKey);
-  if (cached && !cached.stale) return cached.value;
+  const cached = getCachedApiResponse<unknown>(cacheKey);
+  const cachedValue =
+    typeof cached?.value === "string" ? cached.value : null;
+  if (cachedValue !== null && cached && !cached.stale) return cachedValue;
 
   const baseUrl = await getFstreamBaseUrl();
   const first = await requestFstreamResource(baseUrl, path, options);
@@ -419,7 +525,7 @@ async function fetchFstreamResource(path: string, options: ResourceOptions) {
     }
   }
 
-  return cached?.value ?? null;
+  return cachedValue;
 }
 
 async function requestFstreamResource(
@@ -427,6 +533,7 @@ async function requestFstreamResource(
   path: string,
   options: ResourceOptions,
 ) {
+  const startedAt = Date.now();
   try {
     const response = await fetch(new URL(path, baseUrl), {
       method: options.method ?? "GET",
@@ -442,8 +549,19 @@ async function requestFstreamResource(
       },
       signal: AbortSignal.timeout(10000),
     });
-    return response.ok ? await response.text() : null;
-  } catch {
+    if (response.ok) return await response.text();
+
+    reportFstreamIssue(httpErrorCode(response.status), {
+      operation: resourceOperation(options.cacheKey),
+      status: response.status,
+      durationMs: Date.now() - startedAt,
+    });
+    return null;
+  } catch (error) {
+    reportFstreamIssue(requestErrorCode(error), {
+      operation: resourceOperation(options.cacheKey),
+      durationMs: Date.now() - startedAt,
+    });
     return null;
   }
 }
@@ -458,10 +576,9 @@ function extractCurrentFstreamUrl(html: string) {
   ];
 
   for (const candidate of candidates) {
-    const origin = normalizedOrigin(candidate);
+    const origin = normalizedFstreamOrigin(candidate);
     if (!origin) continue;
-    const hostname = new URL(origin).hostname.toLowerCase();
-    if (/^fs\d+\./.test(hostname)) return origin;
+    return origin;
   }
   return null;
 }
@@ -515,63 +632,242 @@ function tmdbImagePath(value: string) {
   return match?.[1] ?? null;
 }
 
-function emptyStreamSet(): StreamSet {
+function pushCandidate(
+  candidates: StreamCandidate[],
+  input: {
+    hostId: PlayerHostId;
+    embedUrl: string | undefined;
+    languageId: StreamLanguageId;
+    audioLanguage: string;
+    subtitleLanguage: string | null;
+    season: number | null;
+    episode: number | null;
+  },
+) {
+  const embedUrl = input.embedUrl;
+  if (!embedUrl) return;
+  const candidate = createStreamCandidate({
+    sourceId: SOURCE_ID,
+    hostId: input.hostId,
+    embedUrl,
+    languageId: input.languageId,
+    audioLanguage: input.audioLanguage,
+    subtitleLanguage: input.subtitleLanguage,
+    season: input.season,
+    episode: input.episode,
+  });
+  if (candidate) {
+    candidates.push(candidate);
+    return;
+  }
+
+  reportFstreamIssue("HOST_REJECTED", {
+    operation: "normalize-player",
+    hostId: input.hostId,
+  });
+}
+
+function parseMoviePlayers(value: string | null): MoviePlayers | null {
+  const parsed = parseUnknownJson(value);
+  if (
+    !isRecord(parsed) ||
+    !isRecord(parsed.players) ||
+    !isRecord(parsed.meta)
+  ) {
+    reportFstreamIssue("INVALID_PAYLOAD", {
+      operation: "movie-players",
+    });
+    return null;
+  }
+
+  const players: MoviePlayers["players"] = {};
+  for (const [host, rawPlayer] of Object.entries(parsed.players)) {
+    if (!isRecord(rawPlayer)) continue;
+    const player: MoviePlayers["players"][string] = {};
+    for (const key of ["default", "vostfr", "vff", "vfq"] as const) {
+      if (typeof rawPlayer[key] === "string") {
+        player[key] = rawPlayer[key];
+      }
+    }
+    players[host] = player;
+  }
+
   return {
-    uqload: {},
-    voe: {},
-    dood: {},
-    filmoon: {},
-    netu: {},
+    players,
+    meta: {
+      tagz: typeof parsed.meta.tagz === "string" ? parsed.meta.tagz : undefined,
+    },
   };
 }
 
-function hasStreams(streams: StreamSet) {
-  return PROVIDER_HOSTS.some((host) =>
-    LANGUAGES.some((language) => Boolean(streams[host][language])),
-  );
-}
-
-function firstHttpUrl(...values: Array<string | undefined>) {
-  for (const value of values) {
-    const url = normalizedHttpUrl(value);
-    if (url) return url;
+function parseSeriesPlayers(value: string | null): SeriesPlayers | null {
+  const parsed = parseUnknownJson(value);
+  if (!isRecord(parsed)) {
+    reportFstreamIssue("INVALID_PAYLOAD", {
+      operation: "series-players",
+    });
+    return null;
   }
-  return null;
+
+  const payload: SeriesPlayers = {
+    vf: {},
+    vostfr: {},
+    vo: {},
+  };
+  for (const language of SERIES_LANGUAGES) {
+    const episodes = normalizeEpisodePlayers(parsed[language]);
+    if (!episodes) {
+      reportFstreamIssue("INVALID_PAYLOAD", {
+        operation: "series-players",
+      });
+      return null;
+    }
+    payload[language] = episodes;
+  }
+  return payload;
 }
 
-function normalizedHttpUrl(value: string | undefined) {
+function normalizeEpisodePlayers(
+  value: unknown,
+): Record<string, Record<string, string>> | null {
+  if (value === undefined) return {};
+  if (!isRecord(value)) return null;
+
+  const episodes: Record<string, Record<string, string>> = {};
+  for (const [episode, rawPlayers] of Object.entries(value)) {
+    if (!/^\d+$/.test(episode) || !isRecord(rawPlayers)) return null;
+    const players: Record<string, string> = {};
+    for (const [host, embedUrl] of Object.entries(rawPlayers)) {
+      if (typeof embedUrl !== "string") return null;
+      players[host] = embedUrl;
+    }
+    episodes[episode] = players;
+  }
+  return episodes;
+}
+
+function parseUnknownJson(value: string | null): unknown {
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function normalizedSecureHttpUrl(value: string | undefined) {
   if (!value) return null;
   try {
     const url = new URL(value.trim());
-    return url.protocol === "http:" || url.protocol === "https:"
-      ? url.toString()
-      : null;
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      (url.port && url.port !== "443")
+    ) {
+      return null;
+    }
+    url.hash = "";
+    return url.toString();
   } catch {
     return null;
   }
 }
 
-function normalizedOrigin(value: string | undefined) {
-  const url = normalizedHttpUrl(value);
-  return url ? new URL(url).origin : null;
-}
+function normalizedFstreamOrigin(value: string | undefined) {
+  const normalized = normalizedSecureHttpUrl(value);
+  if (!normalized) return null;
 
-function parseJson<T>(value: string | null) {
-  if (!value) return null;
-  try {
-    return JSON.parse(value) as T;
-  } catch {
+  const url = new URL(normalized);
+  const hostname = url.hostname.toLowerCase();
+  const allowedOrigins = new Set(
+    (process.env.FSTREAM_ALLOWED_ORIGINS ?? "")
+      .split(",")
+      .flatMap((item) => {
+        const allowed = normalizedSecureHttpUrl(item.trim());
+        return allowed ? [new URL(allowed).origin] : [];
+      }),
+  );
+  if (!/^fs\d+\.lol$/.test(hostname) && !allowedOrigins.has(url.origin)) {
     return null;
   }
+  return url.origin;
 }
 
-function toLanguageOption(language: ProviderLanguage) {
-  const labels: Record<ProviderLanguage, string> = {
-    vf: "VF",
-    vostfr: "VOSTFR",
-    vo: "VO",
+function resourceOperation(cacheKey: string) {
+  return cacheKey.split(":", 1)[0] || "resource";
+}
+
+type FstreamErrorCode =
+  | "TIMEOUT"
+  | "DOMAIN_UNAVAILABLE"
+  | "SEARCH_FAILED"
+  | "INVALID_PAYLOAD"
+  | "TMDB_MISMATCH"
+  | "NO_STREAM"
+  | "HOST_REJECTED"
+  | "HTTP_403"
+  | "HTTP_429"
+  | "HTTP_5XX"
+  | "HTTP_ERROR"
+  | "NETWORK_ERROR";
+
+function httpErrorCode(status: number): FstreamErrorCode {
+  if (status === 403) return "HTTP_403";
+  if (status === 429) return "HTTP_429";
+  if (status >= 500) return "HTTP_5XX";
+  return "HTTP_ERROR";
+}
+
+function requestErrorCode(error: unknown): FstreamErrorCode {
+  return error instanceof Error &&
+    (error.name === "TimeoutError" || error.name === "AbortError")
+    ? "TIMEOUT"
+    : "NETWORK_ERROR";
+}
+
+function reportFstreamIssue(
+  code: FstreamErrorCode,
+  context: {
+    operation: string;
+    status?: number;
+    durationMs?: number;
+    mediaType?: MediaType;
+    candidateCount?: number;
+    hostId?: PlayerHostId;
+  },
+) {
+  console.warn(
+    "[stream-source]",
+    JSON.stringify({
+      sourceId: SOURCE_ID,
+      code,
+      ...context,
+    }),
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeFstreamSource(value: unknown): FstreamSource | null {
+  if (
+    !isRecord(value) ||
+    typeof value.newsId !== "string" ||
+    !/^\d{4,}$/.test(value.newsId) ||
+    (value.seasonNumber !== null &&
+      (!Number.isSafeInteger(value.seasonNumber) ||
+        Number(value.seasonNumber) < 0))
+  ) {
+    return null;
+  }
+
+  return {
+    newsId: value.newsId,
+    seasonNumber:
+      value.seasonNumber === null ? null : Number(value.seasonNumber),
   };
-  return { id: language, label: labels[language] };
 }
 
 function sourceKey(
