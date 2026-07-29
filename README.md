@@ -37,12 +37,17 @@ Les tendances expirent rapidement, tandis que les fiches et credits restent en
 cache plus longtemps. Une reponse expiree peut servir de secours si TMDB est
 temporairement indisponible.
 
-Les catalogues `Nouveautes Films` et `Nouveautes Series` suivent par defaut
-`https://fs16.lol/films/` et `https://fs16.lol/s-tv/`. CineVerse ne reprend que
-l'ordre, le titre et l'affiche, puis exige une correspondance TMDB avant
-d'afficher une fiche cliquable. Le HTML source est garde 30 minutes et les
-recherches TMDB 24 heures. `FS16_BASE_URL` permet de changer le domaine si
-necessaire.
+Les catalogues `Nouveautes Films` et `Nouveautes Series` demandent d'abord a
+`https://fstream.info/` quel est le domaine FStream courant, puis consultent les
+rubriques Films et Series de ce domaine. CineVerse ne reprend que l'ordre, le
+titre et l'affiche, puis exige une correspondance TMDB avant d'afficher une
+fiche cliquable. TMDB reste donc la source canonique pour les identifiants,
+notes, synopsis, genres, credits et filtres.
+
+Le domaine courant et le HTML des catalogues sont gardes 30 minutes. Les
+recherches TMDB sont gardees 24 heures. `FSTREAM_BASE_URL` peut forcer
+temporairement un domaine en cas de panne de la page d'annonce; l'ancienne
+variable `FS16_BASE_URL` ne sert plus que de dernier secours.
 
 Le bloc `Pour vous` combine les recommandations et titres similaires TMDB avec
 les genres, langues, notes et popularite. Un dislike exclut toujours le titre
@@ -51,7 +56,20 @@ ne pas sur-apprendre a partir d'un seul avis.
 
 ## Sources video
 
-Par defaut, CineVerse utilise un lecteur de demonstration local qui emet des evenements `postMessage` compatibles avec le suivi de progression. Pour brancher tes propres lecteurs ou services autorises, configure `CINEVERSE_EMBED_PROVIDERS_JSON` dans `.env`. Garde cette valeur sur une seule ligne, sinon Next et Docker ne liront que le premier `[` au runtime.
+Quand une fiche FStream correspond exactement au type et a l'identifiant TMDB,
+CineVerse propose automatiquement les lecteurs Uqload et Voe presents dans la
+version demandee. Pour un film, la VF francaise est prioritaire, puis la VFQ et
+la version par defaut. Pour une serie, le lien est resolu pour la saison et
+l'episode selectionnes. Les langues absentes ne sont pas proposees.
+
+Les correspondances FStream/TMDB sont gardees sept jours et les liens lecteurs
+15 a 30 minutes dans SQLite. Cela limite les requetes sans conserver les flux
+video eux-memes.
+
+Le lecteur de demonstration local reste disponible lorsqu'aucun provider n'est
+configure. Pour brancher d'autres lecteurs ou services autorises, configure
+`CINEVERSE_EMBED_PROVIDERS_JSON` dans `.env`. Garde cette valeur sur une seule
+ligne, sinon Next et Docker ne liront que le premier `[` au runtime.
 
 Placeholders disponibles dans les templates:
 

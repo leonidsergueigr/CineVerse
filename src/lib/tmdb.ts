@@ -1,6 +1,10 @@
 import { fallbackCatalog, fallbackDetails } from "@/lib/fallback-data";
 import { load } from "cheerio";
 import dns from "node:dns";
+import {
+  fetchFstreamCatalogPage,
+  rememberFstreamCatalogMatch,
+} from "@/lib/fstream";
 import { getCachedApiResponse, setCachedApiResponse } from "@/lib/store";
 import type {
   BrowseCatalog,
@@ -97,6 +101,8 @@ type SourceCatalogItem = {
   title: string;
   overview: string;
   posterPath: string | null;
+  newsId: string | null;
+  seasonNumber: number | null;
 };
 
 export async function getHomeCatalog(): Promise<HomeCatalog> {
@@ -373,7 +379,7 @@ export async function getTrailerUrl(mediaType: MediaType, id: number) {
 }
 
 async function getNewCatalogWithMeta(mediaType: MediaType, page?: string) {
-  const sourceCatalog = await getFs16Catalog(mediaType, page);
+  const sourceCatalog = await getFstreamCatalog(mediaType, page);
   if (sourceCatalog.items.length) return sourceCatalog;
 
   return discoverWithMeta({
@@ -384,12 +390,15 @@ async function getNewCatalogWithMeta(mediaType: MediaType, page?: string) {
   });
 }
 
-async function getFs16Catalog(mediaType: MediaType, page?: string) {
+async function getFstreamCatalog(mediaType: MediaType, page?: string) {
   const requestedPage = Number(normalizedPage(page));
-  const html = await fetchFs16Page(mediaType, requestedPage);
+  const html = await fetchFstreamCatalogPage(mediaType, requestedPage);
   if (!html) return emptyMeta();
 
-  const { items: sourceItems, totalPages } = parseFs16Catalog(html, mediaType);
+  const { items: sourceItems, totalPages } = parseFstreamCatalog(
+    html,
+    mediaType,
+  );
   const resolved: Array<CatalogItem | null> = [];
   for (let index = 0; index < sourceItems.length; index += 6) {
     const batch = sourceItems.slice(index, index + 6);
@@ -412,39 +421,7 @@ async function getFs16Catalog(mediaType: MediaType, page?: string) {
   };
 }
 
-async function fetchFs16Page(mediaType: MediaType, page: number) {
-  const baseUrl = process.env.FS16_BASE_URL ?? "https://fs16.lol";
-  const category = mediaType === "movie" ? "films" : "s-tv";
-  const path =
-    page <= 1
-      ? mediaType === "movie"
-        ? "/films/"
-        : "/s-tv/"
-      : `/index.php?cstart=${page}&do=cat&category=${category}`;
-  const url = new URL(path, baseUrl);
-  const cacheKey = `source:fs16:${mediaType}:${page}`;
-  const cached = getCachedApiResponse<string>(cacheKey);
-  if (cached && !cached.stale) return cached.value;
-
-  try {
-    const response = await fetch(url, {
-      headers: {
-        Accept: "text/html",
-        "User-Agent": "CineVerse/1.0",
-      },
-      signal: AbortSignal.timeout(10000),
-      cache: "no-store",
-    });
-    if (!response.ok) return cached?.value ?? null;
-    const html = await response.text();
-    setCachedApiResponse(cacheKey, html, 30 * 60);
-    return html;
-  } catch {
-    return cached?.value ?? null;
-  }
-}
-
-function parseFs16Catalog(html: string, mediaType: MediaType) {
+function parseFstreamCatalog(html: string, mediaType: MediaType) {
   const $ = load(html);
   const items: SourceCatalogItem[] = [];
   const seen = new Set<string>();
@@ -454,10 +431,13 @@ function parseFs16Catalog(html: string, mediaType: MediaType) {
     if (mediaType === "tv" && !card.find(".mli-eps").length) return;
 
     const rawTitle = card.find(".short-title").first().text().trim();
+    const seasonMatch = rawTitle.match(/\s*-\s*Saison\s+(\d+)/i);
     const title =
       mediaType === "tv"
         ? rawTitle.replace(/\s*-\s*Saison\s+\d+.*$/i, "").trim()
         : rawTitle;
+    const href = card.find(".short-poster[href]").first().attr("href") ?? "";
+    const newsId = href.match(/[?&]newsid=(\d+)/)?.[1] ?? null;
     const posterPath = tmdbImagePath(
       card.find(".short-poster img").first().attr("src") ?? "",
     );
@@ -469,6 +449,9 @@ function parseFs16Catalog(html: string, mediaType: MediaType) {
       title,
       posterPath,
       overview: card.find('[id^="desc-"]').first().text().trim(),
+      newsId,
+      seasonNumber:
+        mediaType === "tv" && seasonMatch ? Number(seasonMatch[1]) : null,
     });
   });
 
@@ -509,6 +492,14 @@ async function resolveSourceCatalogItem(
   if (!match) return null;
 
   const item = normalizeItem(match, mediaType);
+  if (item && source.newsId) {
+    rememberFstreamCatalogMatch(
+      mediaType,
+      item.id,
+      source.newsId,
+      source.seasonNumber,
+    );
+  }
   return item && !item.overview && source.overview
     ? { ...item, overview: source.overview }
     : item;

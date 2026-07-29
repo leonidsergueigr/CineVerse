@@ -4,6 +4,7 @@ import {
   applyProviderMetadata,
   resolveProvidersForMedia,
 } from "@/lib/provider-availability";
+import { getFstreamProviders } from "@/lib/fstream";
 import { getEmbedProviders } from "@/lib/providers";
 import { getProgress, hasDislike, hasLike } from "@/lib/store";
 import { getDetails } from "@/lib/tmdb";
@@ -45,12 +46,17 @@ export default async function WatchPage({ params, searchParams }: PageProps) {
     mediaType === "tv"
       ? Math.min(maxEpisode, Math.max(1, requestedEpisode || 1))
       : null;
+  const fstreamProviders = await getFstreamProviders(detail, season, episode);
+  const providers = [
+    ...providerResolution.providers,
+    ...fstreamProviders,
+  ].sort((left, right) => left.priority - right.priority);
   const progress = getProgress(id, mediaType, season, episode);
 
   return (
     <WatchExperience
       detail={detail}
-      providers={providerResolution.providers}
+      providers={providers}
       initialProgress={progress}
       initialLiked={hasLike(id, mediaType)}
       initialDisliked={hasDislike(id, mediaType)}
