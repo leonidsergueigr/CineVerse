@@ -706,10 +706,27 @@ function MediaCard({
   compact?: boolean;
   reason?: string;
 }) {
+  const watchHref = item.resume
+    ? `/watch/${item.mediaType}/${item.id}${
+        item.mediaType === "tv" &&
+        item.resume.seasonNumber !== null &&
+        item.resume.episodeNumber !== null
+          ? `?season=${item.resume.seasonNumber}&episode=${item.resume.episodeNumber}`
+          : ""
+      }`
+    : `/watch/${item.mediaType}/${item.id}`;
+  const resumePercent =
+    item.resume?.durationSeconds && item.resume.durationSeconds > 0
+      ? Math.min(
+          100,
+          (item.resume.progressSeconds / item.resume.durationSeconds) * 100,
+        )
+      : 0;
+
   return (
     <article className="group relative">
       <Link
-        href={`/watch/${item.mediaType}/${item.id}`}
+        href={watchHref}
         className="block overflow-hidden rounded bg-zinc-900 ring-1 ring-white/10 transition duration-200 hover:scale-[1.03] hover:ring-white/30"
       >
         <div
@@ -735,11 +752,23 @@ function MediaCard({
               : "N/A"}
           </div>
           <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-black/80 to-transparent" />
+          {item.resume ? (
+            <div className="absolute inset-x-0 bottom-0 h-1.5 bg-white/25">
+              <span
+                className="block h-full bg-[#e50914]"
+                style={{ width: `${resumePercent}%` }}
+              />
+            </div>
+          ) : null}
         </div>
         <div className={compact ? "min-h-16 p-2" : reason ? "min-h-28 p-3" : "min-h-20 p-3"}>
           <h3 className="line-clamp-2 text-sm font-bold leading-5">{item.title}</h3>
           <p className="mt-1 text-xs text-zinc-400">
-            {yearOf(item.releaseDate)} · {item.mediaType === "movie" ? "Film" : "Serie"}
+            {item.resume
+              ? resumeLabel(item)
+              : `${yearOf(item.releaseDate)} · ${
+                  item.mediaType === "movie" ? "Film" : "Serie"
+                }`}
           </p>
           {reason ? (
             <p className="mt-2 line-clamp-2 text-xs leading-4 text-zinc-400">{reason}</p>
@@ -770,6 +799,22 @@ function MediaCard({
       </button>
     </article>
   );
+}
+
+function resumeLabel(item: CatalogItem) {
+  if (!item.resume) return "";
+  const position =
+    item.mediaType === "tv" &&
+    item.resume.seasonNumber !== null &&
+    item.resume.episodeNumber !== null
+      ? `S${item.resume.seasonNumber} E${item.resume.episodeNumber}`
+      : "Film";
+  if (item.resume.progressSeconds <= 0) return `${position} · Episode suivant`;
+  if (item.resume.durationSeconds <= 0) return `${position} · En cours`;
+  const percent = Math.round(
+    (item.resume.progressSeconds / item.resume.durationSeconds) * 100,
+  );
+  return `${position} · ${Math.min(99, percent)} %`;
 }
 
 function uniqueItems(items: CatalogItem[]) {

@@ -36,6 +36,10 @@ export async function POST(request: NextRequest) {
     backdropPath: body.backdropPath ?? null,
     progressSeconds: Math.max(0, Math.floor(Number(body.progressSeconds) || 0)),
     durationSeconds: Math.max(0, Math.floor(Number(body.durationSeconds) || 0)),
+    completed: body.completed === true,
+    seriesEpisodeCounts: Array.isArray(body.seriesEpisodeCounts)
+      ? body.seriesEpisodeCounts
+      : [],
   });
 
   return NextResponse.json({ ok: true });

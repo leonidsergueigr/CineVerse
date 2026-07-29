@@ -15,6 +15,12 @@ export type CatalogItem = {
   popularity: number;
   genreIds: number[];
   originalLanguage: string;
+  resume?: {
+    seasonNumber: number | null;
+    episodeNumber: number | null;
+    progressSeconds: number;
+    durationSeconds: number;
+  };
 };
 
 export type MediaDetails = CatalogItem & {
@@ -81,7 +87,20 @@ export type WatchProgress = {
   progressSeconds: number;
   durationSeconds: number;
   completed: boolean;
+  seriesEpisodeCounts: Array<{
+    seasonNumber: number;
+    episodeCount: number;
+  }>;
   updatedAt: string;
+};
+
+export type SearchSuggestion = {
+  id: number;
+  kind: MediaType | "person";
+  title: string;
+  subtitle: string;
+  imageUrl: string | null;
+  href: string;
 };
 
 export type LikeRecord = {

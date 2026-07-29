@@ -1,9 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { ChevronDown, Search } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import {
+  ChevronDown,
+  Clapperboard,
+  LoaderCircle,
+  Search,
+  Tv,
+  UserRound,
+} from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
 import { GENRES, LANGUAGES, SERIES_GENRES } from "@/lib/genres";
+import type { SearchSuggestion } from "@/lib/types";
 
 type MenuKind = "movie" | "tv" | "anime";
 
@@ -14,15 +23,22 @@ type Props = {
 
 export function SiteHeader({ query, fixed = true }: Props) {
   const [openMenu, setOpenMenu] = useState<MenuKind | null>(null);
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const headerRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     function closeOnOutsideClick(event: MouseEvent) {
-      if (!headerRef.current?.contains(event.target as Node)) setOpenMenu(null);
+      if (!headerRef.current?.contains(event.target as Node)) {
+        setOpenMenu(null);
+        setMobileSearchOpen(false);
+      }
     }
 
     function closeOnEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") setOpenMenu(null);
+      if (event.key === "Escape") {
+        setOpenMenu(null);
+        setMobileSearchOpen(false);
+      }
     }
 
     document.addEventListener("mousedown", closeOnOutsideClick);
@@ -38,45 +54,81 @@ export function SiteHeader({ query, fixed = true }: Props) {
       ref={headerRef}
       className={`${fixed ? "fixed" : "sticky"} inset-x-0 top-0 z-30 border-b border-white/10 bg-[#070707]/95 backdrop-blur-xl`}
     >
-      <div className="mx-auto grid h-16 max-w-7xl grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 px-4 sm:gap-5 sm:px-6 lg:gap-10 lg:px-8">
+      <div className="mx-auto grid h-16 max-w-7xl grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 px-3 sm:gap-5 sm:px-6 lg:gap-10 lg:px-8">
         <Link
           href="/"
-          onClick={() => setOpenMenu(null)}
-          className="text-lg font-black tracking-[0.16em] text-[#e50914] sm:text-2xl"
+          onClick={() => {
+            setOpenMenu(null);
+            setMobileSearchOpen(false);
+          }}
+          className="text-base font-black tracking-[0.1em] text-[#e50914] sm:text-2xl sm:tracking-[0.16em]"
         >
           CineVerse
         </Link>
 
-        <form action="/browse" className="relative hidden w-full max-w-xl md:block">
-          <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
-          <input
-            name="q"
-            defaultValue={query}
-            placeholder="Titre, acteur, realisateur..."
-            className="h-10 w-full rounded-full border border-white/15 bg-white/[0.07] pl-11 pr-4 text-sm text-white outline-none transition placeholder:text-zinc-500 focus:border-[#e50914] focus:bg-white/[0.1]"
-          />
-        </form>
+        <div className="hidden w-full max-w-xl md:block">
+          <SearchBox query={query} />
+        </div>
 
-        <nav className="flex h-full items-center gap-0.5 text-xs font-medium text-zinc-300 sm:gap-1 sm:text-sm">
+        <div className="flex h-full min-w-0 items-center">
+          <button
+            type="button"
+            onClick={() => {
+              setMobileSearchOpen((open) => !open);
+              setOpenMenu(null);
+            }}
+            aria-label="Rechercher"
+            aria-expanded={mobileSearchOpen}
+            className={`mr-0.5 inline-flex h-10 w-9 shrink-0 items-center justify-center rounded-full transition md:hidden ${
+              mobileSearchOpen
+                ? "bg-white text-black"
+                : "text-zinc-300 hover:bg-white/10 hover:text-white"
+            }`}
+          >
+            <Search className="h-4 w-4" />
+          </button>
+          <nav className="flex h-full min-w-0 items-center gap-0 text-[11px] font-medium text-zinc-300 sm:gap-1 sm:text-sm">
           <NavMenuButton
             label="Films"
             open={openMenu === "movie"}
-            onClick={() => setOpenMenu((current) => (current === "movie" ? null : "movie"))}
+            onClick={() => {
+              setMobileSearchOpen(false);
+              setOpenMenu((current) =>
+                current === "movie" ? null : "movie",
+              );
+            }}
           />
           <NavMenuButton
             label="Series"
             open={openMenu === "tv"}
-            onClick={() => setOpenMenu((current) => (current === "tv" ? null : "tv"))}
+            onClick={() => {
+              setMobileSearchOpen(false);
+              setOpenMenu((current) => (current === "tv" ? null : "tv"));
+            }}
           />
           <NavMenuButton
             label="Animes"
             open={openMenu === "anime"}
-            onClick={() =>
-              setOpenMenu((current) => (current === "anime" ? null : "anime"))
-            }
+            onClick={() => {
+              setMobileSearchOpen(false);
+              setOpenMenu((current) =>
+                current === "anime" ? null : "anime",
+              );
+            }}
           />
-        </nav>
+          </nav>
+        </div>
       </div>
+
+      {mobileSearchOpen ? (
+        <div className="absolute inset-x-0 top-full border-b border-white/10 bg-[#090909] p-3 shadow-2xl md:hidden">
+          <SearchBox
+            query={query}
+            autoFocus
+            onNavigate={() => setMobileSearchOpen(false)}
+          />
+        </div>
+      ) : null}
 
       {openMenu ? (
         <BrowseMenu menu={openMenu} onNavigate={() => setOpenMenu(null)} />
@@ -99,7 +151,7 @@ function NavMenuButton({
       type="button"
       onClick={onClick}
       aria-expanded={open}
-      className={`inline-flex h-full items-center gap-1.5 border-b-2 px-1.5 transition sm:px-3 ${
+      className={`inline-flex h-full min-w-0 items-center gap-1 border-b-2 px-1.5 transition sm:gap-1.5 sm:px-3 ${
         open
           ? "border-[#e50914] text-white"
           : "border-transparent text-zinc-300 hover:text-white"
@@ -110,6 +162,191 @@ function NavMenuButton({
         className={`hidden h-4 w-4 transition sm:block ${open ? "rotate-180" : ""}`}
       />
     </button>
+  );
+}
+
+function SearchBox({
+  query,
+  autoFocus = false,
+  onNavigate,
+}: {
+  query?: string;
+  autoFocus?: boolean;
+  onNavigate?: () => void;
+}) {
+  const router = useRouter();
+  const suggestionsId = useId();
+  const [value, setValue] = useState(query ?? "");
+  const [items, setItems] = useState<SearchSuggestion[]>([]);
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const requestRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    const search = value.trim();
+    requestRef.current?.abort();
+    if (search.length < 2) return;
+
+    const timer = window.setTimeout(() => {
+      const controller = new AbortController();
+      requestRef.current = controller;
+      setLoading(true);
+      void fetch(`/api/search/suggestions?q=${encodeURIComponent(search)}`, {
+        signal: controller.signal,
+      })
+        .then((response) =>
+          response.ok
+            ? (response.json() as Promise<{ items?: SearchSuggestion[] }>)
+            : { items: [] },
+        )
+        .then((payload) => {
+          if (controller.signal.aborted) return;
+          setItems(payload.items ?? []);
+          setOpen(true);
+          setActiveIndex(-1);
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          if (!controller.signal.aborted) setLoading(false);
+        });
+    }, 220);
+
+    return () => window.clearTimeout(timer);
+  }, [value]);
+
+  function navigate(href: string) {
+    setOpen(false);
+    onNavigate?.();
+    router.push(href);
+  }
+
+  return (
+    <form
+      action="/browse"
+      role="search"
+      className="relative w-full"
+      onSubmit={(event) => {
+        if (!value.trim()) event.preventDefault();
+        if (activeIndex >= 0 && items[activeIndex]) {
+          event.preventDefault();
+          navigate(items[activeIndex].href);
+        }
+      }}
+    >
+      <Search className="pointer-events-none absolute left-4 top-1/2 z-10 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+      <input
+        name="q"
+        value={value}
+        autoFocus={autoFocus}
+        autoComplete="off"
+        placeholder="Titre, acteur, realisateur..."
+        aria-label="Rechercher un film, une serie ou une personne"
+        role="combobox"
+        aria-autocomplete="list"
+        aria-expanded={open && value.trim().length >= 2}
+        aria-controls={suggestionsId}
+        aria-activedescendant={
+          activeIndex >= 0
+            ? `${suggestionsId}-option-${activeIndex}`
+            : undefined
+        }
+        onFocus={() => {
+          if (value.trim().length >= 2) setOpen(true);
+        }}
+        onBlur={() => window.setTimeout(() => setOpen(false), 120)}
+        onChange={(event) => {
+          const nextValue = event.target.value;
+          setValue(nextValue);
+          if (nextValue.trim().length < 2) {
+            setItems([]);
+            setOpen(false);
+            setLoading(false);
+            setActiveIndex(-1);
+          }
+        }}
+        onKeyDown={(event) => {
+          if (!open || !items.length) return;
+          if (event.key === "ArrowDown") {
+            event.preventDefault();
+            setActiveIndex((index) => (index + 1) % items.length);
+          } else if (event.key === "ArrowUp") {
+            event.preventDefault();
+            setActiveIndex(
+              (index) => (index <= 0 ? items.length - 1 : index - 1),
+            );
+          } else if (event.key === "Escape") {
+            setOpen(false);
+            setActiveIndex(-1);
+          }
+        }}
+        className="h-11 w-full rounded-full border border-white/15 bg-[#191919] pl-11 pr-11 text-sm text-white outline-none transition placeholder:text-zinc-500 focus:border-white/35 focus:bg-[#202020]"
+      />
+      {loading ? (
+        <LoaderCircle className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-zinc-500" />
+      ) : null}
+
+      {open && value.trim().length >= 2 ? (
+        <div
+          id={suggestionsId}
+          role="listbox"
+          className="absolute inset-x-0 top-[calc(100%+8px)] z-50 max-h-[min(68vh,34rem)] overflow-y-auto rounded border border-white/15 bg-[#111] p-1.5 shadow-2xl"
+        >
+          {items.map((item, index) => (
+            <button
+              key={`${item.kind}-${item.id}`}
+              id={`${suggestionsId}-option-${index}`}
+              type="button"
+              role="option"
+              aria-selected={activeIndex === index}
+              onMouseDown={(event) => event.preventDefault()}
+              onMouseEnter={() => setActiveIndex(index)}
+              onClick={() => navigate(item.href)}
+              className={`grid min-h-16 w-full grid-cols-[42px_minmax(0,1fr)] items-center gap-3 rounded px-2 py-1.5 text-left transition ${
+                activeIndex === index ? "bg-white/10" : "hover:bg-white/[0.07]"
+              }`}
+            >
+              <span className="grid h-14 w-[42px] place-items-center overflow-hidden rounded bg-zinc-900 ring-1 ring-white/10">
+                {item.imageUrl ? (
+                  <img
+                    src={item.imageUrl}
+                    alt=""
+                    className="h-full w-full object-cover"
+                  />
+                ) : item.kind === "movie" ? (
+                  <Clapperboard className="h-4 w-4 text-zinc-500" />
+                ) : item.kind === "tv" ? (
+                  <Tv className="h-4 w-4 text-zinc-500" />
+                ) : (
+                  <UserRound className="h-4 w-4 text-zinc-500" />
+                )}
+              </span>
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-bold text-white">
+                  {item.title}
+                </span>
+                <span className="mt-1 block truncate text-xs text-zinc-500">
+                  {item.subtitle}
+                </span>
+              </span>
+            </button>
+          ))}
+          {!loading && !items.length ? (
+            <div className="px-4 py-6 text-center text-sm text-zinc-500">
+              Aucun resultat proche
+            </div>
+          ) : null}
+          <button
+            type="submit"
+            onMouseDown={(event) => event.preventDefault()}
+            onMouseEnter={() => setActiveIndex(-1)}
+            className="mt-1 flex h-10 w-full items-center justify-center rounded border-t border-white/10 text-xs font-bold text-zinc-300 transition hover:bg-white/[0.07] hover:text-white"
+          >
+            Tous les resultats pour “{value.trim()}”
+          </button>
+        </div>
+      ) : null}
+    </form>
   );
 }
 

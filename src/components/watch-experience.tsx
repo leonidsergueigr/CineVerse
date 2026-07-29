@@ -3,10 +3,10 @@
 import Link from "next/link";
 import {
   ArrowLeft,
+  Check,
   Heart,
   Languages,
   Play,
-  Server,
   Star,
   ThumbsDown,
   ToggleRight,
@@ -55,6 +55,7 @@ export function WatchExperience({
   const [season, setSeason] = useState(initialSeasonNumber);
   const [episode, setEpisode] = useState(initialEpisodeNumber);
   const [started, setStarted] = useState(false);
+  const [completed, setCompleted] = useState(initialProgress?.completed ?? false);
   const [liked, setLiked] = useState(initialLiked);
   const [disliked, setDisliked] = useState(initialDisliked);
   const [autoNext, setAutoNext] = useState(true);
@@ -67,6 +68,8 @@ export function WatchExperience({
   const lastSaveRef = useRef(0);
   const autoAdvancedRef = useRef("");
   const playerFrameRef = useRef<HTMLIFrameElement>(null);
+  const fallbackProgressRef = useRef(initialProgress?.progressSeconds ?? 0);
+  const trackingDetectedRef = useRef(false);
 
   const provider = providers.find((item) => item.id === providerId) ?? providers[0];
   const languageOptions = useMemo(() => getProviderLanguages(provider), [provider]);
@@ -81,6 +84,14 @@ export function WatchExperience({
     { length: selectedSeason?.episodeCount ?? 1 },
     (_, index) => index + 1,
   );
+  const seriesEpisodeCounts = useMemo(
+    () =>
+      availableSeasons.map((item) => ({
+        seasonNumber: item.seasonNumber,
+        episodeCount: item.episodeCount,
+      })),
+    [availableSeasons],
+  );
   const iframeUrl = useMemo(() => {
     if (!provider) return "";
     return buildEmbedUrl(provider, detail, {
@@ -91,6 +102,34 @@ export function WatchExperience({
       autoNext,
     });
   }, [activeLanguage, autoNext, detail, episode, provider, season, started]);
+
+  const savePlaybackProgress = useCallback(
+    (
+      currentTime: number,
+      duration: number,
+      playbackCompleted = false,
+    ) => {
+      void fetch("/api/progress", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          tmdbId: detail.id,
+          mediaType: detail.mediaType,
+          seasonNumber: detail.mediaType === "tv" ? season : null,
+          episodeNumber: detail.mediaType === "tv" ? episode : null,
+          title: detail.title,
+          posterPath: detail.posterPath,
+          backdropPath: detail.backdropPath,
+          progressSeconds: Math.max(0, currentTime),
+          durationSeconds: Math.max(0, duration),
+          completed: playbackCompleted,
+          seriesEpisodeCounts:
+            detail.mediaType === "tv" ? seriesEpisodeCounts : [],
+        }),
+      });
+    },
+    [detail, episode, season, seriesEpisodeCounts],
+  );
 
   const advanceEpisode = useCallback(() => {
     if (!autoNext || detail.mediaType !== "tv") return false;
@@ -105,6 +144,9 @@ export function WatchExperience({
       autoAdvancedRef.current = key;
       setEpisode(nextEpisode);
       setProgress({ currentTime: 0, duration: 0 });
+      setCompleted(false);
+      fallbackProgressRef.current = 0;
+      trackingDetectedRef.current = false;
       replaceEpisodeUrl(season, nextEpisode);
       return true;
     }
@@ -117,6 +159,9 @@ export function WatchExperience({
       setSeason(nextSeason.seasonNumber);
       setEpisode(1);
       setProgress({ currentTime: 0, duration: 0 });
+      setCompleted(false);
+      fallbackProgressRef.current = 0;
+      trackingDetectedRef.current = false;
       replaceEpisodeUrl(nextSeason.seasonNumber, 1);
       return true;
     }
@@ -140,16 +185,24 @@ export function WatchExperience({
           : event.data;
       const playbackEvent = normalizePlaybackEvent(data);
       if (!playbackEvent) return;
+      trackingDetectedRef.current = true;
 
       if (playbackEvent.ended) {
-        if (playbackEvent.duration > 0) {
-          saveCompletedProgress(
-            detail,
-            season,
-            episode,
-            playbackEvent.duration,
-          );
-        }
+        const duration = Math.max(
+          playbackEvent.duration,
+          progress.duration,
+          playbackEvent.currentTime,
+        );
+        setCompleted(true);
+        setProgress({
+          currentTime: duration || playbackEvent.currentTime,
+          duration,
+        });
+        savePlaybackProgress(
+          duration || playbackEvent.currentTime,
+          duration,
+          true,
+        );
         advanceEpisode();
         return;
       }
@@ -158,64 +211,85 @@ export function WatchExperience({
       const duration = playbackEvent.duration;
       if (!Number.isFinite(currentTime) || !Number.isFinite(duration)) return;
 
+      fallbackProgressRef.current = currentTime;
       setProgress({ currentTime, duration });
+      if (isNearPlaybackEnd(detail.mediaType, currentTime, duration)) {
+        setCompleted(true);
+      }
       maybeAutoAdvance(currentTime, duration);
       const now = Date.now();
       if (now - lastSaveRef.current < 9000) return;
       lastSaveRef.current = now;
 
-      fetch("/api/progress", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          tmdbId: detail.id,
-          mediaType: detail.mediaType,
-          seasonNumber: detail.mediaType === "tv" ? season : null,
-          episodeNumber: detail.mediaType === "tv" ? episode : null,
-          title: detail.title,
-          posterPath: detail.posterPath,
-          backdropPath: detail.backdropPath,
-          progressSeconds: currentTime,
-          durationSeconds: duration,
-        }),
-      });
+      savePlaybackProgress(currentTime, duration);
     }
 
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [advanceEpisode, detail, episode, maybeAutoAdvance, season]);
+  }, [
+    advanceEpisode,
+    detail.mediaType,
+    maybeAutoAdvance,
+    progress.duration,
+    savePlaybackProgress,
+  ]);
 
   useEffect(() => {
     if (
       !started ||
-      !autoNext ||
-      detail.mediaType !== "tv" ||
       provider?.supportsTracking ||
       playerLoadToken === 0
     ) {
       return;
     }
 
-    const fallbackDurationSeconds = Math.max(60, (detail.runtime ?? 45) * 60);
-    const timer = window.setTimeout(() => {
-      saveCompletedProgress(
-        detail,
-        season,
-        episode,
-        fallbackDurationSeconds,
-      );
-      advanceEpisode();
-    }, fallbackDurationSeconds * 1000);
+    const estimatedDuration = Math.max(60, (detail.runtime ?? 45) * 60);
+    let ticksSinceSave = 0;
 
-    return () => window.clearTimeout(timer);
+    const timer = window.setInterval(() => {
+      if (
+        document.visibilityState !== "visible" ||
+        trackingDetectedRef.current
+      ) {
+        return;
+      }
+
+      const currentTime = Math.min(
+        estimatedDuration,
+        fallbackProgressRef.current + 5,
+      );
+      fallbackProgressRef.current = currentTime;
+      ticksSinceSave += 1;
+      setProgress({ currentTime, duration: estimatedDuration });
+
+      const nearEnd = isNearPlaybackEnd(
+        detail.mediaType,
+        currentTime,
+        estimatedDuration,
+      );
+      if (nearEnd) setCompleted(true);
+      if (nearEnd || ticksSinceSave >= 3) {
+        savePlaybackProgress(currentTime, estimatedDuration, nearEnd);
+        ticksSinceSave = 0;
+      }
+      if (
+        autoNext &&
+        detail.mediaType === "tv" &&
+        currentTime / estimatedDuration >= 0.98
+      ) {
+        advanceEpisode();
+      }
+    }, 5000);
+
+    return () => window.clearInterval(timer);
   }, [
     advanceEpisode,
     autoNext,
-    detail,
-    episode,
+    detail.mediaType,
+    detail.runtime,
     playerLoadToken,
     provider?.supportsTracking,
-    season,
+    savePlaybackProgress,
     started,
   ]);
 
@@ -277,36 +351,68 @@ export function WatchExperience({
     setSeason(nextSeason);
     setEpisode(1);
     setProgress({ currentTime: 0, duration: 0 });
+    setCompleted(false);
+    fallbackProgressRef.current = 0;
+    trackingDetectedRef.current = false;
     autoAdvancedRef.current = "";
     replaceEpisodeUrl(nextSeason, 1);
+    void loadStoredProgress(nextSeason, 1);
   }
 
   function changeEpisode(nextEpisode: number) {
     setEpisode(nextEpisode);
     setProgress({ currentTime: 0, duration: 0 });
+    setCompleted(false);
+    fallbackProgressRef.current = 0;
+    trackingDetectedRef.current = false;
     autoAdvancedRef.current = "";
     replaceEpisodeUrl(season, nextEpisode);
+    void loadStoredProgress(season, nextEpisode);
   }
 
   function startPlayback() {
     setStarted(true);
     if (progress.currentTime > 0) return;
+    fallbackProgressRef.current = 1;
+    setProgress((current) => ({ ...current, currentTime: 1 }));
+    savePlaybackProgress(1, progress.duration);
+  }
 
-    fetch("/api/progress", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        tmdbId: detail.id,
+  function markAsWatched() {
+    const duration = Math.max(progress.duration, (detail.runtime ?? 45) * 60);
+    fallbackProgressRef.current = duration;
+    setCompleted(true);
+    setProgress({ currentTime: duration, duration });
+    savePlaybackProgress(duration, duration, true);
+    if (detail.mediaType === "tv" && autoNext) advanceEpisode();
+  }
+
+  async function loadStoredProgress(
+    nextSeason: number,
+    nextEpisode: number,
+  ) {
+    try {
+      const params = new URLSearchParams({
+        tmdbId: String(detail.id),
         mediaType: detail.mediaType,
-        seasonNumber: detail.mediaType === "tv" ? season : null,
-        episodeNumber: detail.mediaType === "tv" ? episode : null,
-        title: detail.title,
-        posterPath: detail.posterPath,
-        backdropPath: detail.backdropPath,
-        progressSeconds: 1,
-        durationSeconds: progress.duration,
-      }),
-    });
+        season: String(nextSeason),
+        episode: String(nextEpisode),
+      });
+      const response = await fetch(`/api/progress?${params.toString()}`);
+      if (!response.ok) return;
+      const payload = (await response.json()) as {
+        progress?: WatchProgress | null;
+      };
+      if (!payload.progress) return;
+      fallbackProgressRef.current = payload.progress.progressSeconds;
+      setProgress({
+        currentTime: payload.progress.progressSeconds,
+        duration: payload.progress.durationSeconds,
+      });
+      setCompleted(payload.progress.completed);
+    } catch {
+      // The selected episode remains playable even if history is unavailable.
+    }
   }
 
   const percent = progress.duration ? Math.min(100, (progress.currentTime / progress.duration) * 100) : 0;
@@ -336,7 +442,7 @@ export function WatchExperience({
           </div>
         </div>
 
-        <section className="grid min-h-[calc(100vh-4rem)] grid-rows-[minmax(52vh,1fr)_auto]">
+        <section className="grid min-h-[calc(100svh-4rem)] grid-rows-[minmax(42svh,1fr)_auto] sm:grid-rows-[minmax(52vh,1fr)_auto]">
           <div className="relative bg-black">
             {started && iframeUrl ? (
               <iframe
@@ -346,16 +452,16 @@ export function WatchExperience({
                 allow="autoplay; fullscreen; picture-in-picture"
                 allowFullScreen
                 onLoad={() => setPlayerLoadToken((value) => value + 1)}
-                className="h-full min-h-[55vh] w-full border-0"
+                className="h-full min-h-[42svh] w-full border-0 sm:min-h-[55vh]"
                 title={`Lecteur ${detail.title}`}
               />
             ) : !iframeUrl ? (
-              <div className="flex h-full min-h-[55vh] items-center justify-center bg-zinc-950 text-zinc-400">
+              <div className="flex h-full min-h-[42svh] items-center justify-center bg-zinc-950 text-zinc-400 sm:min-h-[55vh]">
                 Aucune source configuree
               </div>
             ) : null}
             {!started && iframeUrl ? (
-              <div className="absolute inset-0 grid min-h-[55vh] place-items-center overflow-hidden bg-black">
+              <div className="absolute inset-0 grid min-h-[42svh] place-items-center overflow-hidden bg-black sm:min-h-[55vh]">
                 {detail.backdropUrl ?? detail.posterUrl ? (
                   <img
                     src={detail.backdropUrl ?? detail.posterUrl ?? ""}
@@ -382,7 +488,7 @@ export function WatchExperience({
           </div>
 
           <div className="border-t border-white/10 bg-[#0b0b0b]">
-            <div className="mx-auto grid min-w-0 max-w-7xl gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[180px_minmax(0,1fr)_340px] lg:px-8">
+            <div className="mx-auto grid min-w-0 max-w-7xl gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[150px_minmax(0,1fr)] lg:px-8 xl:grid-cols-[180px_minmax(0,1fr)_320px]">
               <aside className="hidden lg:block">
                 {detail.posterUrl ? (
                   <img
@@ -479,13 +585,16 @@ export function WatchExperience({
                 ) : null}
               </section>
 
-              <aside className="grid min-w-0 content-start gap-3 rounded bg-zinc-950 p-4 ring-1 ring-white/10">
-                <div className="grid grid-cols-2 gap-2">
+              <aside className="order-first grid min-w-0 content-start gap-3 rounded bg-zinc-950 p-4 ring-1 ring-white/10 lg:order-none lg:col-span-2 xl:col-span-1">
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(88px,1fr))] gap-2">
                   {providers.map((item) => (
                     <button
                       key={item.id}
                       type="button"
-                      onClick={() => setProviderId(item.id)}
+                      onClick={() => {
+                        trackingDetectedRef.current = false;
+                        setProviderId(item.id);
+                      }}
                       className={`h-9 rounded border px-3 text-xs font-bold transition ${
                         providerId === item.id
                           ? "border-[#e50914] bg-[#e50914] text-white"
@@ -495,20 +604,6 @@ export function WatchExperience({
                       {item.name}
                     </button>
                   ))}
-                </div>
-                <div className="grid grid-cols-[auto_1fr] items-center gap-3">
-                  <Server className="h-4 w-4 text-zinc-400" />
-                  <select
-                    value={providerId}
-                    onChange={(event) => setProviderId(event.target.value)}
-                    className="control-field w-full"
-                  >
-                    {providers.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.name}
-                      </option>
-                    ))}
-                  </select>
                 </div>
                 <div className="grid grid-cols-[auto_1fr] items-center gap-3">
                   <Languages className="h-4 w-4 text-zinc-400" />
@@ -594,8 +689,24 @@ export function WatchExperience({
                     {disliked ? "Ignore" : "Pas pour moi"}
                   </button>
                 </div>
-                <div className="rounded bg-white/5 p-3 text-xs text-zinc-300">
-                  {formatTime(progress.currentTime)} / {formatTime(progress.duration)}
+                <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
+                  <div className="rounded bg-white/5 p-3 text-xs text-zinc-300">
+                    {formatTime(progress.currentTime)} /{" "}
+                    {formatTime(progress.duration)}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={markAsWatched}
+                    aria-pressed={completed}
+                    className={`inline-flex h-10 items-center gap-2 rounded px-3 text-xs font-bold transition ${
+                      completed
+                        ? "bg-[#e50914] text-white"
+                        : "bg-white/[0.06] text-zinc-200 ring-1 ring-white/10 hover:bg-white/10"
+                    }`}
+                  >
+                    <Check className="h-4 w-4" />
+                    {completed ? "Vu" : "Marquer vu"}
+                  </button>
                 </div>
               </aside>
             </div>
@@ -654,27 +765,16 @@ function replaceEpisodeUrl(season: number, episode: number) {
   window.history.replaceState(null, "", url);
 }
 
-function saveCompletedProgress(
-  detail: MediaDetails,
-  season: number,
-  episode: number,
+function isNearPlaybackEnd(
+  mediaType: MediaDetails["mediaType"],
+  currentTime: number,
   duration: number,
 ) {
-  void fetch("/api/progress", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      tmdbId: detail.id,
-      mediaType: detail.mediaType,
-      seasonNumber: season,
-      episodeNumber: episode,
-      title: detail.title,
-      posterPath: detail.posterPath,
-      backdropPath: detail.backdropPath,
-      progressSeconds: duration,
-      durationSeconds: duration,
-    }),
-  });
+  if (duration <= 0) return false;
+  const ratio = currentTime / duration;
+  const remaining = Math.max(0, duration - currentTime);
+  const creditsWindow = mediaType === "movie" ? 7 * 60 : 3 * 60;
+  return ratio >= 0.9 || (ratio >= 0.75 && remaining <= creditsWindow);
 }
 
 function personBrowseHref(

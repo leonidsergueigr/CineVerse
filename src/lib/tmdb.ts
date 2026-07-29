@@ -1,6 +1,7 @@
 import { fallbackCatalog, fallbackDetails } from "@/lib/fallback-data";
 import { load } from "cheerio";
 import dns from "node:dns";
+import Fuse from "fuse.js";
 import {
   fetchFstreamCatalogPage,
   rememberFstreamCatalogMatch,
@@ -13,11 +14,13 @@ import type {
   HomeCatalog,
   MediaDetails,
   MediaType,
+  SearchSuggestion,
 } from "@/lib/types";
 
 const TMDB_BASE_URL = "https://api.themoviedb.org/3";
 const IMAGE_BASE_URL = "https://image.tmdb.org/t/p";
 const tmdbRequests = new Map<string, Promise<unknown | null>>();
+let fuzzySearchPool: Promise<CatalogItem[]> | null = null;
 
 dns.setDefaultResultOrder("ipv4first");
 
@@ -37,6 +40,8 @@ type TmdbResult = {
   genre_ids?: number[];
   genres?: Array<{ id: number; name: string }>;
   original_language?: string;
+  profile_path?: string | null;
+  known_for_department?: string;
 };
 
 type TmdbList = {
@@ -281,7 +286,145 @@ export async function searchWithMeta(
     page: normalizedPage(page),
   });
 
-  return normalizeMeta(data, type === "multi" ? undefined : type, withFallback);
+  const result = normalizeMeta(
+    data,
+    type === "multi" ? undefined : type,
+    withFallback,
+  );
+  if (Number(normalizedPage(page)) > 1 || query.trim().length < 2) {
+    return result;
+  }
+
+  const fuzzyMatches = await getFuzzyCatalogMatches(
+    query,
+    type === "multi" ? undefined : type,
+    20,
+  );
+  if (!fuzzyMatches.length) return result;
+
+  const items = uniqueCatalogItems([...result.items, ...fuzzyMatches]).slice(
+    0,
+    20,
+  );
+  return {
+    ...result,
+    items,
+    totalResults: Math.max(result.totalResults, items.length),
+  };
+}
+
+export async function getSearchSuggestions(
+  query: string,
+  limit = 8,
+): Promise<SearchSuggestion[]> {
+  const normalizedQuery = query.trim();
+  if (normalizedQuery.length < 2) return [];
+
+  const data = await tmdb<TmdbList>("/search/multi", {
+    query: normalizedQuery,
+    include_adult: "false",
+    page: "1",
+  });
+  const direct = (data?.results ?? []).flatMap((result) => {
+    if (result.media_type === "movie" || result.media_type === "tv") {
+      const item = normalizeItem(result);
+      return item ? [catalogSuggestion(item)] : [];
+    }
+    if (result.media_type !== "person" || !result.name) return [];
+
+    const params = new URLSearchParams({
+      type: "movie",
+      person: String(result.id),
+      personName: result.name,
+      personRole:
+        result.known_for_department === "Directing" ? "crew" : "cast",
+    });
+    if (result.known_for_department === "Directing") {
+      params.set("personJob", "Director");
+    }
+    return [
+      {
+        id: result.id,
+        kind: "person" as const,
+        title: result.name,
+        subtitle:
+          result.known_for_department === "Directing"
+            ? "Realisation"
+            : "Casting",
+        imageUrl: posterUrl(result.profile_path ?? null, "w185"),
+        href: `/browse?${params.toString()}`,
+      },
+    ];
+  });
+  const fuzzy = await getFuzzyCatalogMatches(normalizedQuery, undefined, limit);
+  const suggestions = [
+    ...direct,
+    ...fuzzy.map(catalogSuggestion),
+  ];
+  const seen = new Set<string>();
+  return suggestions
+    .filter((suggestion) => {
+      const key = `${suggestion.kind}:${suggestion.id}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, limit);
+}
+
+async function getFuzzyCatalogMatches(
+  query: string,
+  mediaType: MediaType | undefined,
+  limit: number,
+) {
+  const pool = (await getFuzzySearchPool()).filter(
+    (item) => !mediaType || item.mediaType === mediaType,
+  );
+  if (!pool.length) return [];
+
+  const fuse = new Fuse(pool, {
+    keys: [{ name: "title", weight: 1 }],
+    threshold: 0.38,
+    distance: 120,
+    ignoreLocation: true,
+    minMatchCharLength: 2,
+  });
+  return fuse.search(query, { limit }).map((result) => result.item);
+}
+
+function getFuzzySearchPool() {
+  if (fuzzySearchPool) return fuzzySearchPool;
+
+  fuzzySearchPool = Promise.all(
+    (["movie", "tv"] as const).flatMap((mediaType) =>
+      ["popularity.desc", "vote_count.desc"].flatMap((sortBy) =>
+        [1, 2, 3].map(async (page) => {
+          const data = await tmdb<TmdbList>(`/discover/${mediaType}`, {
+            sort_by: sortBy,
+            include_adult: "false",
+            page: String(page),
+          });
+          return normalizeList(data?.results, mediaType, false);
+        }),
+      ),
+    ),
+  ).then((groups) => uniqueCatalogItems(groups.flat()));
+
+  return fuzzySearchPool;
+}
+
+function catalogSuggestion(item: CatalogItem): SearchSuggestion {
+  const year = item.releaseDate?.slice(0, 4);
+  return {
+    id: item.id,
+    kind: item.mediaType,
+    title: item.title,
+    subtitle: `${item.mediaType === "movie" ? "Film" : "Serie"}${
+      year ? ` · ${year}` : ""
+    }`,
+    imageUrl: item.posterUrl,
+    href: `/watch/${item.mediaType}/${item.id}`,
+  };
 }
 
 export async function getDetails(mediaType: MediaType, id: number): Promise<MediaDetails> {

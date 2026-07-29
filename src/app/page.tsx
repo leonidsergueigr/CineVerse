@@ -17,9 +17,15 @@ export default async function Home() {
     ),
     buildPersonalizedRecommendations(likes, dislikes),
   ]);
-  const continueWatching = progress.map(
-    (item, index) => refreshedItems[index] ?? progressToCatalogItem(item),
-  );
+  const continueWatching = progress.map((item, index) => ({
+    ...(refreshedItems[index] ?? progressToCatalogItem(item)),
+    resume: {
+      seasonNumber: item.seasonNumber,
+      episodeNumber: item.episodeNumber,
+      progressSeconds: item.progressSeconds,
+      durationSeconds: item.durationSeconds,
+    },
+  }));
 
   return (
     <CineVerseHome

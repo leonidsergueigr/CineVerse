@@ -18,6 +18,11 @@ type ProgressInput = {
   backdropPath?: string | null;
   progressSeconds: number;
   durationSeconds: number;
+  completed?: boolean;
+  seriesEpisodeCounts?: Array<{
+    seasonNumber: number;
+    episodeCount: number;
+  }>;
 };
 
 type LikeInput = {
@@ -80,6 +85,7 @@ export function getDb() {
       progress_seconds integer not null default 0,
       duration_seconds integer not null default 0,
       completed integer not null default 0,
+      series_episode_counts text not null default '[]',
       updated_at text not null default current_timestamp,
       unique(user_id, tmdb_id, media_type, season_number, episode_number)
     );
@@ -120,6 +126,12 @@ export function getDb() {
     create index if not exists external_api_cache_expiry
       on external_api_cache(expires_at);
   `);
+  ensureColumn(
+    db,
+    "watch_history",
+    "series_episode_counts",
+    "text not null default '[]'",
+  );
 
   return db;
 }
@@ -178,11 +190,13 @@ export function setCachedApiResponse(
 }
 
 export function saveProgress(input: ProgressInput) {
-  const completed =
-    input.durationSeconds > 0 && input.progressSeconds / input.durationSeconds >= 0.9 ? 1 : 0;
+  const completed = isPlaybackComplete(input) ? 1 : 0;
+  const seriesEpisodeCounts = JSON.stringify(
+    sanitizeEpisodeCounts(input.seriesEpisodeCounts),
+  );
 
   const database = getDb();
-  const payload = { ...input, completed };
+  const payload = { ...input, completed, seriesEpisodeCounts };
 
   const updated = database
     .prepare(
@@ -191,9 +205,19 @@ export function saveProgress(input: ProgressInput) {
         title = @title,
         poster_path = @posterPath,
         backdrop_path = @backdropPath,
-        progress_seconds = @progressSeconds,
-        duration_seconds = @durationSeconds,
-        completed = @completed,
+        progress_seconds = case
+          when completed = 1 and @completed = 0 then progress_seconds
+          else @progressSeconds
+        end,
+        duration_seconds = case
+          when completed = 1 and @completed = 0 then duration_seconds
+          else @durationSeconds
+        end,
+        completed = max(completed, @completed),
+        series_episode_counts = case
+          when @seriesEpisodeCounts = '[]' then series_episode_counts
+          else @seriesEpisodeCounts
+        end,
         updated_at = datetime('now')
       where user_id = 'local'
         and tmdb_id = @tmdbId
@@ -211,10 +235,12 @@ export function saveProgress(input: ProgressInput) {
       `
       insert into watch_history (
         user_id, tmdb_id, media_type, season_number, episode_number, title,
-        poster_path, backdrop_path, progress_seconds, duration_seconds, completed, updated_at
+        poster_path, backdrop_path, progress_seconds, duration_seconds, completed,
+        series_episode_counts, updated_at
       )
       values ('local', @tmdbId, @mediaType, @seasonNumber, @episodeNumber, @title,
-        @posterPath, @backdropPath, @progressSeconds, @durationSeconds, @completed, datetime('now'))
+        @posterPath, @backdropPath, @progressSeconds, @durationSeconds, @completed,
+        @seriesEpisodeCounts, datetime('now'))
     `,
     )
     .run(payload);
@@ -247,26 +273,28 @@ export function getContinueWatching(limit = 12): WatchProgress[] {
   const rows = getDb()
     .prepare(
       `
-      with ranked_history as (
-        select *,
-          row_number() over (
-            partition by user_id, tmdb_id, media_type
-            order by datetime(updated_at) desc, id desc
-          ) as media_rank
-        from watch_history
-        where user_id = 'local'
-      )
-      select * from ranked_history
-      where media_rank = 1
-        and completed = 0
+      select *
+      from watch_history
+      where user_id = 'local'
         and progress_seconds > 0
       order by datetime(updated_at) desc, id desc
-      limit ?
-    `,
+      `,
     )
-    .all(limit) as DbProgress[];
+    .all() as DbProgress[];
 
-  return rows.map(mapProgress);
+  const grouped = new Map<string, DbProgress[]>();
+  for (const row of rows) {
+    const key = `${row.media_type}:${row.tmdb_id}`;
+    const group = grouped.get(key) ?? [];
+    group.push(row);
+    grouped.set(key, group);
+  }
+
+  return [...grouped.values()]
+    .map(resolveContinueWatching)
+    .filter((progress): progress is WatchProgress => Boolean(progress))
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    .slice(0, limit);
 }
 
 export function setLike(input: LikeInput) {
@@ -408,6 +436,7 @@ type DbProgress = {
   progress_seconds: number;
   duration_seconds: number;
   completed: 0 | 1;
+  series_episode_counts: string;
   updated_at: string;
 };
 
@@ -423,8 +452,109 @@ function mapProgress(row: DbProgress): WatchProgress {
     progressSeconds: row.progress_seconds,
     durationSeconds: row.duration_seconds,
     completed: Boolean(row.completed),
+    seriesEpisodeCounts: parseEpisodeCounts(row.series_episode_counts),
     updatedAt: row.updated_at,
   };
+}
+
+function resolveContinueWatching(rows: DbProgress[]) {
+  const latest = rows[0];
+  if (!latest) return null;
+  if (latest.media_type === "movie") {
+    return latest.completed ? null : mapProgress(latest);
+  }
+
+  const episodeCounts =
+    rows.map((row) => parseEpisodeCounts(row.series_episode_counts))
+      .find((counts) => counts.length > 0) ?? [];
+  const latestIncomplete = rows.find((row) => !row.completed);
+  if (latestIncomplete) return mapProgress(latestIncomplete);
+  if (!episodeCounts.length) return null;
+
+  const completedEpisodes = new Set(
+    rows
+      .filter(
+        (row) =>
+          row.completed &&
+          row.season_number !== null &&
+          row.episode_number !== null,
+      )
+      .map((row) => `${row.season_number}:${row.episode_number}`),
+  );
+  const allEpisodes = episodeCounts.flatMap(({ seasonNumber, episodeCount }) =>
+    Array.from({ length: episodeCount }, (_, index) => ({
+      seasonNumber,
+      episodeNumber: index + 1,
+    })),
+  );
+  const nextEpisode = allEpisodes.find(
+    (episode) =>
+      !completedEpisodes.has(
+        `${episode.seasonNumber}:${episode.episodeNumber}`,
+      ),
+  );
+  if (!nextEpisode) return null;
+
+  return {
+    ...mapProgress(latest),
+    seasonNumber: nextEpisode.seasonNumber,
+    episodeNumber: nextEpisode.episodeNumber,
+    progressSeconds: 0,
+    durationSeconds: 0,
+    completed: false,
+    seriesEpisodeCounts: episodeCounts,
+  };
+}
+
+function isPlaybackComplete(input: ProgressInput) {
+  if (input.completed) return true;
+  if (input.durationSeconds <= 0) return false;
+
+  const ratio = input.progressSeconds / input.durationSeconds;
+  const remainingSeconds = Math.max(
+    0,
+    input.durationSeconds - input.progressSeconds,
+  );
+  const creditsWindow = input.mediaType === "movie" ? 7 * 60 : 3 * 60;
+  return ratio >= 0.9 || (ratio >= 0.75 && remainingSeconds <= creditsWindow);
+}
+
+function sanitizeEpisodeCounts(
+  counts: ProgressInput["seriesEpisodeCounts"],
+) {
+  if (!Array.isArray(counts)) return [];
+  return counts
+    .map((item) => ({
+      seasonNumber: Math.max(0, Math.floor(Number(item.seasonNumber))),
+      episodeCount: Math.max(0, Math.floor(Number(item.episodeCount))),
+    }))
+    .filter(
+      (item) =>
+        Number.isFinite(item.seasonNumber) &&
+        Number.isFinite(item.episodeCount) &&
+        item.episodeCount > 0,
+    );
+}
+
+function parseEpisodeCounts(value: string) {
+  try {
+    return sanitizeEpisodeCounts(JSON.parse(value) as ProgressInput["seriesEpisodeCounts"]);
+  } catch {
+    return [];
+  }
+}
+
+function ensureColumn(
+  database: Database.Database,
+  table: string,
+  column: string,
+  definition: string,
+) {
+  const columns = database.prepare(`pragma table_info(${table})`).all() as Array<{
+    name: string;
+  }>;
+  if (columns.some((item) => item.name === column)) return;
+  database.exec(`alter table ${table} add column ${column} ${definition}`);
 }
 
 function parseNumberArray(value: string) {
