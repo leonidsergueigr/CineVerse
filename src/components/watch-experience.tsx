@@ -48,7 +48,7 @@ export function WatchExperience({
   const availableSeasons = useMemo(
     () =>
       (detail.seasons ?? [])
-        .filter((item) => item.episodeCount > 0)
+        .filter((item) => item.seasonNumber > 0 && item.episodeCount > 0)
         .sort((a, b) => a.seasonNumber - b.seasonNumber),
     [detail.seasons],
   );

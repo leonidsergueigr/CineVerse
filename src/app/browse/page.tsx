@@ -1,4 +1,5 @@
 import { BrowseExperience } from "@/components/cineverse-home";
+import { getActiveProfileId } from "@/lib/active-profile";
 import { getDislikes, getLikes } from "@/lib/store";
 import { getBrowseCatalog } from "@/lib/tmdb";
 
@@ -10,8 +11,9 @@ type PageProps = {
 
 export default async function BrowsePage({ searchParams }: PageProps) {
   const params = await searchParams;
-  const likes = getLikes();
-  const dislikes = getDislikes();
+  const profileId = await getActiveProfileId();
+  const likes = getLikes(profileId);
+  const dislikes = getDislikes(profileId);
   const catalog = await getBrowseCatalog({
     query: valueOf(params.q),
     catalog: valueOf(params.catalog),

@@ -1,5 +1,12 @@
 export type MediaType = "movie" | "tv";
 
+export type Profile = {
+  id: string;
+  name: string;
+  color: string;
+  createdAt: string;
+};
+
 export type CatalogItem = {
   id: number;
   mediaType: MediaType;

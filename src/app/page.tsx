@@ -1,4 +1,5 @@
 import { CineVerseHome } from "@/components/cineverse-home";
+import { getActiveProfileId } from "@/lib/active-profile";
 import { buildPersonalizedRecommendations } from "@/lib/recommendations";
 import { getContinueWatching, getDislikes, getLikes } from "@/lib/store";
 import { getCatalogItemsByIds, getHomeCatalog } from "@/lib/tmdb";
@@ -7,9 +8,10 @@ import type { CatalogItem, WatchProgress } from "@/lib/types";
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
-  const progress = getContinueWatching();
-  const likes = getLikes();
-  const dislikes = getDislikes();
+  const profileId = await getActiveProfileId();
+  const progress = getContinueWatching(profileId);
+  const likes = getLikes(profileId);
+  const dislikes = getDislikes(profileId);
   const [catalog, refreshedItems, recommendations] = await Promise.all([
     getHomeCatalog(),
     getCatalogItemsByIds(

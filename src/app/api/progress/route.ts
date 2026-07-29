@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getActiveProfileId } from "@/lib/active-profile";
 import { getContinueWatching, getProgress, saveProgress } from "@/lib/store";
 import type { MediaType } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
+  const profileId = await getActiveProfileId();
   const search = request.nextUrl.searchParams;
   const tmdbId = Number(search.get("tmdbId"));
   const mediaType = search.get("mediaType") as MediaType | null;
@@ -13,11 +15,11 @@ export async function GET(request: NextRequest) {
     const season = nullableNumber(search.get("season"));
     const episode = nullableNumber(search.get("episode"));
     return NextResponse.json({
-      progress: getProgress(tmdbId, mediaType, season, episode),
+      progress: getProgress(profileId, tmdbId, mediaType, season, episode),
     });
   }
 
-  return NextResponse.json({ items: getContinueWatching() });
+  return NextResponse.json({ items: getContinueWatching(profileId) });
 }
 
 export async function POST(request: NextRequest) {
@@ -26,7 +28,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid media payload" }, { status: 400 });
   }
 
-  saveProgress({
+  const profileId = await getActiveProfileId();
+  saveProgress(profileId, {
     tmdbId: Number(body.tmdbId),
     mediaType: body.mediaType,
     seasonNumber: nullableNumber(body.seasonNumber),

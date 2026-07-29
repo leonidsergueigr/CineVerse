@@ -13,6 +13,7 @@ import {
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { GENRES, LANGUAGES, SERIES_GENRES } from "@/lib/genres";
 import type { SearchSuggestion } from "@/lib/types";
+import { ProfileSwitcher } from "@/components/profile-switcher";
 
 type MenuKind = "movie" | "tv" | "anime";
 
@@ -23,6 +24,7 @@ type Props = {
 
 export function SiteHeader({ query, fixed = true }: Props) {
   const [openMenu, setOpenMenu] = useState<MenuKind | null>(null);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const headerRef = useRef<HTMLElement>(null);
 
@@ -30,6 +32,7 @@ export function SiteHeader({ query, fixed = true }: Props) {
     function closeOnOutsideClick(event: MouseEvent) {
       if (!headerRef.current?.contains(event.target as Node)) {
         setOpenMenu(null);
+        setProfileOpen(false);
         setMobileSearchOpen(false);
       }
     }
@@ -37,6 +40,7 @@ export function SiteHeader({ query, fixed = true }: Props) {
     function closeOnEscape(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setOpenMenu(null);
+        setProfileOpen(false);
         setMobileSearchOpen(false);
       }
     }
@@ -59,6 +63,7 @@ export function SiteHeader({ query, fixed = true }: Props) {
           href="/"
           onClick={() => {
             setOpenMenu(null);
+            setProfileOpen(false);
             setMobileSearchOpen(false);
           }}
           className="text-base font-black tracking-[0.1em] text-[#e50914] sm:text-2xl sm:tracking-[0.16em]"
@@ -76,6 +81,7 @@ export function SiteHeader({ query, fixed = true }: Props) {
             onClick={() => {
               setMobileSearchOpen((open) => !open);
               setOpenMenu(null);
+              setProfileOpen(false);
             }}
             aria-label="Rechercher"
             aria-expanded={mobileSearchOpen}
@@ -93,6 +99,7 @@ export function SiteHeader({ query, fixed = true }: Props) {
             open={openMenu === "movie"}
             onClick={() => {
               setMobileSearchOpen(false);
+              setProfileOpen(false);
               setOpenMenu((current) =>
                 current === "movie" ? null : "movie",
               );
@@ -103,6 +110,7 @@ export function SiteHeader({ query, fixed = true }: Props) {
             open={openMenu === "tv"}
             onClick={() => {
               setMobileSearchOpen(false);
+              setProfileOpen(false);
               setOpenMenu((current) => (current === "tv" ? null : "tv"));
             }}
           />
@@ -111,12 +119,23 @@ export function SiteHeader({ query, fixed = true }: Props) {
             open={openMenu === "anime"}
             onClick={() => {
               setMobileSearchOpen(false);
+              setProfileOpen(false);
               setOpenMenu((current) =>
                 current === "anime" ? null : "anime",
               );
             }}
           />
           </nav>
+          <ProfileSwitcher
+            open={profileOpen}
+            onOpenChange={(nextOpen) => {
+              setProfileOpen(nextOpen);
+              if (nextOpen) {
+                setOpenMenu(null);
+                setMobileSearchOpen(false);
+              }
+            }}
+          />
         </div>
       </div>
 

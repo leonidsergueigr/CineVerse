@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getActiveProfileId } from "@/lib/active-profile";
 import { getLikes, setLike } from "@/lib/store";
 import type { MediaType } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  return NextResponse.json({ items: getLikes() });
+  const profileId = await getActiveProfileId();
+  return NextResponse.json({ items: getLikes(profileId) });
 }
 
 export async function POST(request: NextRequest) {
@@ -14,7 +16,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid like payload" }, { status: 400 });
   }
 
-  setLike({
+  const profileId = await getActiveProfileId();
+  setLike(profileId, {
     tmdbId: Number(body.tmdbId),
     mediaType: body.mediaType,
     title: String(body.title ?? "Sans titre"),

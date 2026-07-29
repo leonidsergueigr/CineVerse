@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { WatchExperience } from "@/components/watch-experience";
+import { getActiveProfileId } from "@/lib/active-profile";
 import {
   applyProviderMetadata,
   resolveProvidersForMedia,
@@ -31,6 +32,7 @@ export default async function WatchPage({ params, searchParams }: PageProps) {
   const mediaType = route.mediaType as MediaType;
   const id = Number(route.id);
   if (!Number.isFinite(id)) notFound();
+  const profileId = await getActiveProfileId();
 
   const requestedSeason = mediaType === "tv" ? Number(query.season ?? 1) : null;
   const requestedEpisode = mediaType === "tv" ? Number(query.episode ?? 1) : null;
@@ -41,7 +43,7 @@ export default async function WatchPage({ params, searchParams }: PageProps) {
   ]);
   const detail = applyProviderMetadata(tmdbDetail, providerResolution.mediaInfo);
   const availableSeasons = (detail.seasons ?? []).filter(
-    (item) => item.episodeCount > 0,
+    (item) => item.seasonNumber > 0 && item.episodeCount > 0,
   );
   const selectedSeason =
     availableSeasons.find((item) => item.seasonNumber === requestedSeason) ??
@@ -64,12 +66,14 @@ export default async function WatchPage({ params, searchParams }: PageProps) {
     ...providerResolution.providers,
     ...sourceProviders,
   ].sort((left, right) => left.priority - right.priority);
-  const progress = getProgress(id, mediaType, season, episode);
+  const progress = getProgress(profileId, id, mediaType, season, episode);
   const [episodeInfo, seriesProgress] =
     mediaType === "tv" && season !== null && episode !== null
       ? await Promise.all([
           getEpisodeInfo(id, season, episode),
-          Promise.resolve(getSeriesProgressSummary(id, season, maxEpisode)),
+          Promise.resolve(
+            getSeriesProgressSummary(profileId, id, season, maxEpisode),
+          ),
         ])
       : [null, null];
 
@@ -78,8 +82,8 @@ export default async function WatchPage({ params, searchParams }: PageProps) {
       detail={detail}
       providers={providers}
       initialProgress={progress}
-      initialLiked={hasLike(id, mediaType)}
-      initialDisliked={hasDislike(id, mediaType)}
+      initialLiked={hasLike(profileId, id, mediaType)}
+      initialDisliked={hasDislike(profileId, id, mediaType)}
       initialSeason={season}
       initialEpisode={episode}
       initialEpisodeInfo={episodeInfo}

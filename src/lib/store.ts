@@ -1,10 +1,17 @@
 import Database from "better-sqlite3";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import {
+  DEFAULT_PROFILE_ID,
+  MAX_PROFILES,
+  PROFILE_COLORS,
+} from "@/lib/profile-constants";
 import type {
   DislikeRecord,
   LikeRecord,
   MediaType,
+  Profile,
   SeriesProgressSummary,
   WatchProgress,
 } from "@/lib/types";
@@ -86,6 +93,17 @@ export function getDb() {
   }
   db.pragma("journal_mode = WAL");
   db.exec(`
+    create table if not exists profiles (
+      id text primary key,
+      name text not null,
+      color text not null,
+      created_at text not null default current_timestamp,
+      updated_at text not null default current_timestamp
+    );
+
+    insert or ignore into profiles (id, name, color)
+    values ('local', 'Principal', '#e50914');
+
     create table if not exists watch_history (
       id integer primary key autoincrement,
       user_id text not null default 'local',
@@ -150,6 +168,117 @@ export function getDb() {
   return db;
 }
 
+export function getProfiles(): Profile[] {
+  return getDb()
+    .prepare(
+      `
+      select id, name, color, created_at as createdAt
+      from profiles
+      order by case when id = ? then 0 else 1 end, datetime(created_at), name
+    `,
+    )
+    .all(DEFAULT_PROFILE_ID) as Profile[];
+}
+
+export function getProfile(profileId: string | undefined | null) {
+  if (!profileId) return null;
+  return (
+    (getDb()
+      .prepare(
+        `
+        select id, name, color, created_at as createdAt
+        from profiles
+        where id = ?
+        limit 1
+      `,
+      )
+      .get(profileId) as Profile | undefined) ?? null
+  );
+}
+
+export function createProfile(input: { name: string; color?: string }) {
+  const name = normalizeProfileName(input.name);
+  const database = getDb();
+  const count = (
+    database.prepare("select count(*) as count from profiles").get() as {
+      count: number;
+    }
+  ).count;
+  if (count >= MAX_PROFILES) {
+    throw new Error(`Vous pouvez creer jusqu'a ${MAX_PROFILES} profils.`);
+  }
+  if (
+    database
+      .prepare("select 1 from profiles where lower(name) = lower(?) limit 1")
+      .get(name)
+  ) {
+    throw new Error("Ce nom de profil existe deja.");
+  }
+
+  const profile: Profile = {
+    id: `profile-${randomUUID()}`,
+    name,
+    color: normalizeProfileColor(input.color),
+    createdAt: new Date().toISOString(),
+  };
+  database
+    .prepare(
+      `
+      insert into profiles (id, name, color, created_at, updated_at)
+      values (@id, @name, @color, @createdAt, @createdAt)
+    `,
+    )
+    .run(profile);
+  return profile;
+}
+
+export function updateProfile(
+  profileId: string,
+  input: { name?: string; color?: string },
+) {
+  const current = getProfile(profileId);
+  if (!current) throw new Error("Profil introuvable.");
+  const name =
+    input.name === undefined ? current.name : normalizeProfileName(input.name);
+  const color =
+    input.color === undefined
+      ? current.color
+      : normalizeProfileColor(input.color);
+  const duplicate = getDb()
+    .prepare(
+      "select 1 from profiles where lower(name) = lower(?) and id != ? limit 1",
+    )
+    .get(name, profileId);
+  if (duplicate) throw new Error("Ce nom de profil existe deja.");
+
+  getDb()
+    .prepare(
+      `
+      update profiles
+      set name = ?, color = ?, updated_at = datetime('now')
+      where id = ?
+    `,
+    )
+    .run(name, color, profileId);
+  return getProfile(profileId);
+}
+
+export function deleteProfile(profileId: string) {
+  if (profileId === DEFAULT_PROFILE_ID) {
+    throw new Error("Le profil Principal ne peut pas etre supprime.");
+  }
+  if (!getProfile(profileId)) return false;
+
+  const database = getDb();
+  database.transaction(() => {
+    database.prepare("delete from watch_history where user_id = ?").run(profileId);
+    database.prepare("delete from user_likes where user_id = ?").run(profileId);
+    database.prepare("delete from user_dislikes where user_id = ?").run(profileId);
+    database.prepare("delete from profiles where id = ?").run(profileId);
+  })();
+  return true;
+}
+
 export function getCachedApiResponse<T>(cacheKey: string) {
   const row = getDb()
     .prepare(
@@ -203,14 +332,14 @@ export function setCachedApiResponse(
     .run(now - 30 * 24 * 60 * 60 * 1000);
 }
 
-export function saveProgress(input: ProgressInput) {
+export function saveProgress(profileId: string, input: ProgressInput) {
   const completed = isPlaybackComplete(input) ? 1 : 0;
   const seriesEpisodeCounts = JSON.stringify(
     sanitizeEpisodeCounts(input.seriesEpisodeCounts),
   );
 
   const database = getDb();
-  const payload = { ...input, completed, seriesEpisodeCounts };
+  const payload = { ...input, profileId, completed, seriesEpisodeCounts };
 
   const updated = database
     .prepare(
@@ -233,7 +362,7 @@ export function saveProgress(input: ProgressInput) {
           else @seriesEpisodeCounts
         end,
         updated_at = datetime('now')
-      where user_id = 'local'
+      where user_id = @profileId
         and tmdb_id = @tmdbId
         and media_type = @mediaType
         and coalesce(season_number, -1) = coalesce(@seasonNumber, -1)
@@ -252,7 +381,7 @@ export function saveProgress(input: ProgressInput) {
         poster_path, backdrop_path, progress_seconds, duration_seconds, completed,
         series_episode_counts, updated_at
       )
-      values ('local', @tmdbId, @mediaType, @seasonNumber, @episodeNumber, @title,
+      values (@profileId, @tmdbId, @mediaType, @seasonNumber, @episodeNumber, @title,
         @posterPath, @backdropPath, @progressSeconds, @durationSeconds, @completed,
         @seriesEpisodeCounts, datetime('now'))
     `,
@@ -261,6 +390,7 @@ export function saveProgress(input: ProgressInput) {
 }
 
 export function getProgress(
+  profileId: string,
   tmdbId: number,
   mediaType: MediaType,
   seasonNumber: number | null,
@@ -270,7 +400,7 @@ export function getProgress(
     .prepare(
       `
       select * from watch_history
-      where user_id = 'local'
+      where user_id = ?
         and tmdb_id = ?
         and media_type = ?
         and coalesce(season_number, -1) = coalesce(?, -1)
@@ -278,12 +408,15 @@ export function getProgress(
       limit 1
     `,
     )
-    .get(tmdbId, mediaType, seasonNumber, episodeNumber) as DbProgress | undefined;
+    .get(profileId, tmdbId, mediaType, seasonNumber, episodeNumber) as
+    | DbProgress
+    | undefined;
 
   return row ? mapProgress(row) : null;
 }
 
 export function getSeriesProgressSummary(
+  profileId: string,
   tmdbId: number,
   seasonNumber: number,
   totalEpisodes: number,
@@ -294,7 +427,7 @@ export function getSeriesProgressSummary(
         `
         select distinct episode_number
         from watch_history
-        where user_id = 'local'
+        where user_id = ?
           and tmdb_id = ?
           and media_type = 'tv'
           and season_number = ?
@@ -303,7 +436,7 @@ export function getSeriesProgressSummary(
         order by episode_number
       `,
       )
-      .all(tmdbId, seasonNumber) as Array<{ episode_number: number }>
+      .all(profileId, tmdbId, seasonNumber) as Array<{ episode_number: number }>
   )
     .map((row) => row.episode_number)
     .filter(
@@ -319,18 +452,21 @@ export function getSeriesProgressSummary(
   };
 }
 
-export function getContinueWatching(limit = 12): WatchProgress[] {
+export function getContinueWatching(
+  profileId: string,
+  limit = 12,
+): WatchProgress[] {
   const rows = getDb()
     .prepare(
       `
       select *
       from watch_history
-      where user_id = 'local'
+      where user_id = ?
         and progress_seconds > 0
       order by datetime(updated_at) desc, id desc
       `,
     )
-    .all() as DbProgress[];
+    .all(profileId) as DbProgress[];
 
   const grouped = new Map<string, DbProgress[]>();
   for (const row of rows) {
@@ -347,13 +483,13 @@ export function getContinueWatching(limit = 12): WatchProgress[] {
     .slice(0, limit);
 }
 
-export function setLike(input: LikeInput) {
+export function setLike(profileId: string, input: LikeInput) {
   if (!input.liked) {
     getDb()
       .prepare(
-        "delete from user_likes where user_id = 'local' and tmdb_id = ? and media_type = ?",
+        "delete from user_likes where user_id = ? and tmdb_id = ? and media_type = ?",
       )
-      .run(input.tmdbId, input.mediaType);
+      .run(profileId, input.tmdbId, input.mediaType);
     return;
   }
 
@@ -361,64 +497,68 @@ export function setLike(input: LikeInput) {
   database.transaction(() => {
     database
       .prepare(
-        "delete from user_dislikes where user_id = 'local' and tmdb_id = ? and media_type = ?",
+        "delete from user_dislikes where user_id = ? and tmdb_id = ? and media_type = ?",
       )
-      .run(input.tmdbId, input.mediaType);
+      .run(profileId, input.tmdbId, input.mediaType);
     database
       .prepare(
         `
         insert into user_likes (user_id, tmdb_id, media_type, title, poster_path, backdrop_path, liked_at)
-        values ('local', @tmdbId, @mediaType, @title, @posterPath, @backdropPath, datetime('now'))
+        values (@profileId, @tmdbId, @mediaType, @title, @posterPath, @backdropPath, datetime('now'))
         on conflict(user_id, tmdb_id, media_type)
         do update set liked_at = datetime('now'), title = excluded.title,
           poster_path = excluded.poster_path, backdrop_path = excluded.backdrop_path
       `,
       )
-      .run(input);
+      .run({ ...input, profileId });
   })();
 }
 
-export function getLikes(limit = 24): LikeRecord[] {
+export function getLikes(profileId: string, limit = 24): LikeRecord[] {
   return getDb()
     .prepare(
       `
       select tmdb_id as tmdbId, media_type as mediaType, title, poster_path as posterPath,
         backdrop_path as backdropPath, liked_at as likedAt
       from user_likes
-      where user_id = 'local'
+      where user_id = ?
       order by liked_at desc
       limit ?
     `,
     )
-    .all(limit) as LikeRecord[];
+    .all(profileId, limit) as LikeRecord[];
 }
 
-export function hasLike(tmdbId: number, mediaType: MediaType) {
+export function hasLike(
+  profileId: string,
+  tmdbId: number,
+  mediaType: MediaType,
+) {
   const row = getDb()
     .prepare(
-      "select 1 from user_likes where user_id = 'local' and tmdb_id = ? and media_type = ? limit 1",
+      "select 1 from user_likes where user_id = ? and tmdb_id = ? and media_type = ? limit 1",
     )
-    .get(tmdbId, mediaType);
+    .get(profileId, tmdbId, mediaType);
   return Boolean(row);
 }
 
-export function setDislike(input: DislikeInput) {
+export function setDislike(profileId: string, input: DislikeInput) {
   const database = getDb();
   if (!input.disliked) {
     database
       .prepare(
-        "delete from user_dislikes where user_id = 'local' and tmdb_id = ? and media_type = ?",
+        "delete from user_dislikes where user_id = ? and tmdb_id = ? and media_type = ?",
       )
-      .run(input.tmdbId, input.mediaType);
+      .run(profileId, input.tmdbId, input.mediaType);
     return;
   }
 
   database.transaction(() => {
     database
       .prepare(
-        "delete from user_likes where user_id = 'local' and tmdb_id = ? and media_type = ?",
+        "delete from user_likes where user_id = ? and tmdb_id = ? and media_type = ?",
       )
-      .run(input.tmdbId, input.mediaType);
+      .run(profileId, input.tmdbId, input.mediaType);
     database
       .prepare(
         `
@@ -427,7 +567,7 @@ export function setDislike(input: DislikeInput) {
           genre_ids, original_language, disliked_at
         )
         values (
-          'local', @tmdbId, @mediaType, @title, @posterPath, @backdropPath,
+          @profileId, @tmdbId, @mediaType, @title, @posterPath, @backdropPath,
           @genreIds, @originalLanguage, datetime('now')
         )
         on conflict(user_id, tmdb_id, media_type)
@@ -438,13 +578,14 @@ export function setDislike(input: DislikeInput) {
       )
       .run({
         ...input,
+        profileId,
         genreIds: JSON.stringify(input.genreIds ?? []),
         originalLanguage: input.originalLanguage ?? "",
       });
   })();
 }
 
-export function getDislikes(limit = 48): DislikeRecord[] {
+export function getDislikes(profileId: string, limit = 48): DislikeRecord[] {
   const rows = getDb()
     .prepare(
       `
@@ -453,12 +594,12 @@ export function getDislikes(limit = 48): DislikeRecord[] {
         genre_ids as genreIds, original_language as originalLanguage,
         disliked_at as dislikedAt
       from user_dislikes
-      where user_id = 'local'
+      where user_id = ?
       order by disliked_at desc
       limit ?
     `,
     )
-    .all(limit) as DbDislike[];
+    .all(profileId, limit) as DbDislike[];
 
   return rows.map((row) => ({
     ...row,
@@ -466,12 +607,16 @@ export function getDislikes(limit = 48): DislikeRecord[] {
   }));
 }
 
-export function hasDislike(tmdbId: number, mediaType: MediaType) {
+export function hasDislike(
+  profileId: string,
+  tmdbId: number,
+  mediaType: MediaType,
+) {
   const row = getDb()
     .prepare(
-      "select 1 from user_dislikes where user_id = 'local' and tmdb_id = ? and media_type = ? limit 1",
+      "select 1 from user_dislikes where user_id = ? and tmdb_id = ? and media_type = ? limit 1",
     )
-    .get(tmdbId, mediaType);
+    .get(profileId, tmdbId, mediaType);
   return Boolean(row);
 }
 
@@ -575,13 +720,14 @@ function sanitizeEpisodeCounts(
   if (!Array.isArray(counts)) return [];
   return counts
     .map((item) => ({
-      seasonNumber: Math.max(0, Math.floor(Number(item.seasonNumber))),
+      seasonNumber: Math.floor(Number(item.seasonNumber)),
       episodeCount: Math.max(0, Math.floor(Number(item.episodeCount))),
     }))
     .filter(
       (item) =>
         Number.isFinite(item.seasonNumber) &&
         Number.isFinite(item.episodeCount) &&
+        item.seasonNumber > 0 &&
         item.episodeCount > 0,
     );
 }
@@ -616,4 +762,21 @@ function parseNumberArray(value: string) {
   } catch {
     return [];
   }
+}
+
+function normalizeProfileName(value: string) {
+  const name = String(value ?? "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, 24);
+  if (name.length < 2) {
+    throw new Error("Le nom du profil doit contenir au moins 2 caracteres.");
+  }
+  return name;
+}
+
+function normalizeProfileColor(value: string | undefined) {
+  return PROFILE_COLORS.includes(value as (typeof PROFILE_COLORS)[number])
+    ? value!
+    : PROFILE_COLORS[0];
 }
