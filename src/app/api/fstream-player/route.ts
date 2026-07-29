@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   getFstreamEmbedUrl,
+  getFstreamProviderName,
   isFstreamLanguage,
   isFstreamProviderHost,
 } from "@/lib/fstream";
@@ -42,7 +43,7 @@ export async function GET(request: NextRequest) {
   );
   if (!embedUrl) {
     return playerError(
-      `${host === "uqload" ? "Uqload" : "Voe"} n'est pas disponible pour cette version.`,
+      `${getFstreamProviderName(host)} n'est pas disponible pour cette version.`,
       404,
     );
   }

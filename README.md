@@ -57,10 +57,11 @@ ne pas sur-apprendre a partir d'un seul avis.
 ## Sources video
 
 Quand une fiche FStream correspond exactement au type et a l'identifiant TMDB,
-CineVerse propose automatiquement les lecteurs Uqload et Voe presents dans la
-version demandee. Pour un film, la VF francaise est prioritaire, puis la VFQ et
-la version par defaut. Pour une serie, le lien est resolu pour la saison et
-l'episode selectionnes. Les langues absentes ne sont pas proposees.
+CineVerse propose automatiquement les lecteurs Uqload, Voe, Dood, Filmoon et
+Netu presents dans la version demandee. Pour un film, la VF francaise est
+prioritaire, puis la VFQ et la version par defaut. Pour une serie, le lien est
+resolu pour la saison et l'episode selectionnes. Les lecteurs et langues absents
+ne sont pas proposes.
 
 Les correspondances FStream/TMDB sont gardees sept jours et les liens lecteurs
 15 a 30 minutes dans SQLite. Cela limite les requetes sans conserver les flux

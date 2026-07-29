@@ -6,8 +6,21 @@ import type { EmbedProvider, MediaDetails, MediaType } from "@/lib/types";
 
 const FSTREAM_INDEX_URL = "https://fstream.info/";
 const FALLBACK_FSTREAM_URL = "https://fs16.lol";
-const PROVIDER_HOSTS = ["uqload", "voe"] as const;
+const PROVIDER_HOSTS = [
+  "uqload",
+  "voe",
+  "dood",
+  "filmoon",
+  "netu",
+] as const;
 const LANGUAGES = ["vf", "vostfr", "vo"] as const;
+const PROVIDER_NAMES: Record<ProviderHost, string> = {
+  uqload: "Uqload",
+  voe: "Voe",
+  dood: "Dood",
+  filmoon: "Filmoon",
+  netu: "Netu",
+};
 
 type ProviderHost = (typeof PROVIDER_HOSTS)[number];
 type ProviderLanguage = (typeof LANGUAGES)[number];
@@ -139,14 +152,14 @@ export async function getFstreamProviders(
 
   return PROVIDER_HOSTS.flatMap((host, index) => {
     const languages = LANGUAGES.filter((language) =>
-      Boolean(streams[host][language]),
+      Boolean(streams[host]?.[language]),
     );
     if (!languages.length) return [];
 
     return [
       {
         id: `fstream-${host}`,
-        name: host === "uqload" ? "Uqload" : "Voe",
+        name: PROVIDER_NAMES[host],
         template:
           `/api/fstream-player?host=${host}` +
           "&tmdbId={tmdbId}&mediaType={tmdbMediaType}" +
@@ -173,7 +186,7 @@ export async function getFstreamEmbedUrl(
     seasonNumber,
     episodeNumber,
   );
-  return streams?.[host][language] ?? null;
+  return streams?.[host]?.[language] ?? null;
 }
 
 export function isFstreamProviderHost(
@@ -188,6 +201,10 @@ export function isFstreamLanguage(
   return LANGUAGES.includes(value as ProviderLanguage);
 }
 
+export function getFstreamProviderName(host: ProviderHost) {
+  return PROVIDER_NAMES[host];
+}
+
 async function resolveFstreamStreams(
   detail: MediaDetails,
   seasonNumber: number | null,
@@ -196,7 +213,7 @@ async function resolveFstreamStreams(
   const season = detail.mediaType === "tv" ? seasonNumber ?? 1 : null;
   const episode = detail.mediaType === "tv" ? episodeNumber ?? 1 : null;
   const streamCacheKey = [
-    "source:fstream:streams",
+    "source:fstream:streams:v2",
     detail.mediaType,
     detail.id,
     season ?? 0,
@@ -499,7 +516,13 @@ function tmdbImagePath(value: string) {
 }
 
 function emptyStreamSet(): StreamSet {
-  return { uqload: {}, voe: {} };
+  return {
+    uqload: {},
+    voe: {},
+    dood: {},
+    filmoon: {},
+    netu: {},
+  };
 }
 
 function hasStreams(streams: StreamSet) {

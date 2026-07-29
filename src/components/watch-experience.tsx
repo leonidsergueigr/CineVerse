@@ -515,9 +515,6 @@ export function WatchExperience({
 
   const displayedDuration =
     progress.duration || (activeRuntime ? activeRuntime * 60 : 0);
-  const percent = displayedDuration
-    ? Math.min(100, (progress.currentTime / displayedDuration) * 100)
-    : 0;
   const seriesPercent =
     seriesProgress?.totalEpisodes
       ? Math.min(
@@ -592,9 +589,6 @@ export function WatchExperience({
                 </button>
               </div>
             ) : null}
-            <div className="absolute inset-x-0 bottom-0 h-1 bg-white/15">
-              <span className="block h-full bg-[#e50914]" style={{ width: `${percent}%` }} />
-            </div>
           </div>
 
           <div className="border-t border-white/10 bg-[#0b0b0b]">
