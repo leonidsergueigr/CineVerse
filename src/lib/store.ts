@@ -1,11 +1,18 @@
 import Database from "better-sqlite3";
-import { randomUUID } from "node:crypto";
+import {
+  createHash,
+  randomBytes,
+  randomUUID,
+  scryptSync,
+  timingSafeEqual,
+} from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
-  DEFAULT_PROFILE_ID,
+  LEGACY_PROFILE_ID,
   MAX_PROFILES,
   PROFILE_COLORS,
+  PROFILE_PIN_LENGTH,
 } from "@/lib/profile-constants";
 import type {
   DislikeRecord,
@@ -69,6 +76,14 @@ type ApiCacheRow = {
   expires_at: number;
 };
 
+type DbProfile = {
+  id: string;
+  name: string;
+  color: string;
+  hasPin: 0 | 1;
+  createdAt: string;
+};
+
 let db: Database.Database | null = null;
 let lastCachePrune = 0;
 
@@ -92,17 +107,35 @@ export function getDb() {
     );
   }
   db.pragma("journal_mode = WAL");
+  const hadProfilesTable = tableExists(db, "profiles");
+  const hadLegacyPersonalData =
+    !hadProfilesTable &&
+    ["watch_history", "user_likes", "user_dislikes"].some(
+      (table) => tableExists(db!, table) && tableHasRows(db!, table),
+    );
   db.exec(`
     create table if not exists profiles (
       id text primary key,
       name text not null,
       color text not null,
+      pin_hash text,
+      pin_salt text,
       created_at text not null default current_timestamp,
       updated_at text not null default current_timestamp
     );
 
-    insert or ignore into profiles (id, name, color)
-    values ('local', 'Principal', '#e50914');
+    create table if not exists profile_sessions (
+      token_hash text primary key,
+      profile_id text not null,
+      expires_at integer not null,
+      created_at integer not null
+    );
+
+    create index if not exists profile_sessions_profile
+      on profile_sessions(profile_id);
+
+    create index if not exists profile_sessions_expiry
+      on profile_sessions(expires_at);
 
     create table if not exists watch_history (
       id integer primary key autoincrement,
@@ -164,39 +197,55 @@ export function getDb() {
     "series_episode_counts",
     "text not null default '[]'",
   );
+  ensureColumn(db, "profiles", "pin_hash", "text");
+  ensureColumn(db, "profiles", "pin_salt", "text");
+  if (hadLegacyPersonalData) {
+    db.prepare(
+      `
+      insert or ignore into profiles (id, name, color)
+      values (?, 'Principal', ?)
+    `,
+    ).run(LEGACY_PROFILE_ID, PROFILE_COLORS[0]);
+  }
 
   return db;
 }
 
 export function getProfiles(): Profile[] {
-  return getDb()
+  const rows = getDb()
     .prepare(
       `
-      select id, name, color, created_at as createdAt
+      select id, name, color, pin_hash is not null as hasPin,
+        created_at as createdAt
       from profiles
-      order by case when id = ? then 0 else 1 end, datetime(created_at), name
+      order by datetime(created_at), name
     `,
     )
-    .all(DEFAULT_PROFILE_ID) as Profile[];
+    .all() as DbProfile[];
+  return rows.map(mapProfile);
 }
 
 export function getProfile(profileId: string | undefined | null) {
   if (!profileId) return null;
-  return (
-    (getDb()
-      .prepare(
-        `
-        select id, name, color, created_at as createdAt
-        from profiles
-        where id = ?
-        limit 1
-      `,
-      )
-      .get(profileId) as Profile | undefined) ?? null
-  );
+  const row = getDb()
+    .prepare(
+      `
+      select id, name, color, pin_hash is not null as hasPin,
+        created_at as createdAt
+      from profiles
+      where id = ?
+      limit 1
+    `,
+    )
+    .get(profileId) as DbProfile | undefined;
+  return row ? mapProfile(row) : null;
 }
 
-export function createProfile(input: { name: string; color?: string }) {
+export function createProfile(input: {
+  name: string;
+  color?: string;
+  pin?: string;
+}) {
   const name = normalizeProfileName(input.name);
   const database = getDb();
   const count = (
@@ -215,26 +264,32 @@ export function createProfile(input: { name: string; color?: string }) {
     throw new Error("Ce nom de profil existe deja.");
   }
 
+  const pin = createPinRecord(input.pin);
   const profile: Profile = {
     id: `profile-${randomUUID()}`,
     name,
     color: normalizeProfileColor(input.color),
+    hasPin: Boolean(pin.hash),
     createdAt: new Date().toISOString(),
   };
   database
     .prepare(
       `
-      insert into profiles (id, name, color, created_at, updated_at)
-      values (@id, @name, @color, @createdAt, @createdAt)
+      insert into profiles (
+        id, name, color, pin_hash, pin_salt, created_at, updated_at
+      )
+      values (
+        @id, @name, @color, @pinHash, @pinSalt, @createdAt, @createdAt
+      )
     `,
     )
-    .run(profile);
+    .run({ ...profile, pinHash: pin.hash, pinSalt: pin.salt });
   return profile;
 }
 
 export function updateProfile(
   profileId: string,
-  input: { name?: string; color?: string },
+  input: { name?: string; color?: string; pin?: string | null },
 ) {
   const current = getProfile(profileId);
   if (!current) throw new Error("Profil introuvable.");
@@ -251,32 +306,118 @@ export function updateProfile(
     .get(name, profileId);
   if (duplicate) throw new Error("Ce nom de profil existe deja.");
 
-  getDb()
-    .prepare(
-      `
-      update profiles
-      set name = ?, color = ?, updated_at = datetime('now')
-      where id = ?
-    `,
-    )
-    .run(name, color, profileId);
+  if (input.pin === undefined) {
+    getDb()
+      .prepare(
+        `
+        update profiles
+        set name = ?, color = ?, updated_at = datetime('now')
+        where id = ?
+      `,
+      )
+      .run(name, color, profileId);
+  } else {
+    const pin = createPinRecord(input.pin ?? "");
+    getDb()
+      .prepare(
+        `
+        update profiles
+        set name = ?, color = ?, pin_hash = ?, pin_salt = ?,
+          updated_at = datetime('now')
+        where id = ?
+      `,
+      )
+      .run(name, color, pin.hash, pin.salt, profileId);
+  }
   return getProfile(profileId);
 }
 
 export function deleteProfile(profileId: string) {
-  if (profileId === DEFAULT_PROFILE_ID) {
-    throw new Error("Le profil Principal ne peut pas etre supprime.");
-  }
   if (!getProfile(profileId)) return false;
 
   const database = getDb();
   database.transaction(() => {
+    database
+      .prepare("delete from profile_sessions where profile_id = ?")
+      .run(profileId);
     database.prepare("delete from watch_history where user_id = ?").run(profileId);
     database.prepare("delete from user_likes where user_id = ?").run(profileId);
     database.prepare("delete from user_dislikes where user_id = ?").run(profileId);
     database.prepare("delete from profiles where id = ?").run(profileId);
   })();
   return true;
+}
+
+export function createProfileSession(profileId: string) {
+  if (!getProfile(profileId)) throw new Error("Profil introuvable.");
+  const token = randomBytes(32).toString("base64url");
+  const now = Date.now();
+  const database = getDb();
+  database
+    .prepare(
+      `
+      insert into profile_sessions (
+        token_hash, profile_id, expires_at, created_at
+      )
+      values (?, ?, ?, ?)
+    `,
+    )
+    .run(
+      hashSessionToken(token),
+      profileId,
+      now + 30 * 24 * 60 * 60 * 1000,
+      now,
+    );
+  database
+    .prepare("delete from profile_sessions where expires_at <= ?")
+    .run(now);
+  return token;
+}
+
+export function getProfileIdForSession(token: string | undefined) {
+  if (!token) return null;
+  const row = getDb()
+    .prepare(
+      `
+      select profile_id as profileId
+      from profile_sessions
+      where token_hash = ? and expires_at > ?
+      limit 1
+    `,
+    )
+    .get(hashSessionToken(token), Date.now()) as
+    | { profileId: string }
+    | undefined;
+  return row?.profileId ?? null;
+}
+
+export function revokeProfileSession(token: string | undefined) {
+  if (!token) return;
+  getDb()
+    .prepare("delete from profile_sessions where token_hash = ?")
+    .run(hashSessionToken(token));
+}
+
+export function verifyProfilePin(profileId: string, pin: string) {
+  const row = getDb()
+    .prepare(
+      `
+      select pin_hash as pinHash, pin_salt as pinSalt
+      from profiles
+      where id = ?
+      limit 1
+    `,
+    )
+    .get(profileId) as
+    | { pinHash: string | null; pinSalt: string | null }
+    | undefined;
+  if (!row) return false;
+  if (!row.pinHash || !row.pinSalt) return true;
+  if (!isValidPin(pin)) return false;
+
+  const expected = Buffer.from(row.pinHash, "hex");
+  const actual = scryptSync(pin, row.pinSalt, expected.length);
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
 export function getCachedApiResponse<T>(cacheKey: string) {
@@ -779,4 +920,59 @@ function normalizeProfileColor(value: string | undefined) {
   return PROFILE_COLORS.includes(value as (typeof PROFILE_COLORS)[number])
     ? value!
     : PROFILE_COLORS[0];
+}
+
+function mapProfile(row: DbProfile): Profile {
+  return {
+    ...row,
+    hasPin: Boolean(row.hasPin),
+  };
+}
+
+function createPinRecord(pin: string | undefined) {
+  const normalizedPin = String(pin ?? "").trim();
+  if (!normalizedPin) return { hash: null, salt: null };
+  if (!isValidPin(normalizedPin)) {
+    throw new Error(
+      `Le code PIN doit contenir exactement ${PROFILE_PIN_LENGTH} chiffres.`,
+    );
+  }
+  const salt = randomBytes(16).toString("hex");
+  return {
+    hash: scryptSync(normalizedPin, salt, 32).toString("hex"),
+    salt,
+  };
+}
+
+function isValidPin(pin: string) {
+  return new RegExp(`^\\d{${PROFILE_PIN_LENGTH}}$`).test(pin);
+}
+
+function tableExists(database: Database.Database, table: string) {
+  return Boolean(
+    database
+      .prepare(
+        `
+        select 1
+        from sqlite_master
+        where type = 'table' and name = ?
+        limit 1
+      `,
+      )
+      .get(table),
+  );
+}
+
+function tableHasRows(database: Database.Database, table: string) {
+  return Boolean(
+    (
+      database.prepare(`select count(*) as count from ${table}`).get() as {
+        count: number;
+      }
+    ).count,
+  );
+}
+
+function hashSessionToken(token: string) {
+  return createHash("sha256").update(token).digest("hex");
 }

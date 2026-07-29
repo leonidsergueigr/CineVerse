@@ -7,6 +7,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
   const profileId = await getActiveProfileId();
+  if (!profileId) return profileRequired();
   const search = request.nextUrl.searchParams;
   const tmdbId = Number(search.get("tmdbId"));
   const mediaType = search.get("mediaType") as MediaType | null;
@@ -29,6 +30,7 @@ export async function POST(request: NextRequest) {
   }
 
   const profileId = await getActiveProfileId();
+  if (!profileId) return profileRequired();
   saveProgress(profileId, {
     tmdbId: Number(body.tmdbId),
     mediaType: body.mediaType,
@@ -46,6 +48,13 @@ export async function POST(request: NextRequest) {
   });
 
   return NextResponse.json({ ok: true });
+}
+
+function profileRequired() {
+  return NextResponse.json(
+    { error: "Selectionnez un profil." },
+    { status: 401 },
+  );
 }
 
 function isMediaType(value: unknown): value is MediaType {

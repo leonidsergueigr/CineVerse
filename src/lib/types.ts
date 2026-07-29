@@ -4,6 +4,7 @@ export type Profile = {
   id: string;
   name: string;
   color: string;
+  hasPin: boolean;
   createdAt: string;
 };
 

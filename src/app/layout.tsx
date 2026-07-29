@@ -13,8 +13,12 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "CineVerse",
-  description: "Home cinema local auto-heberge",
+  title: {
+    default: "CineVerse",
+    template: "%s | CineVerse",
+  },
+  applicationName: "CineVerse",
+  description: "Votre home cinema local et personnalise.",
 };
 
 export default function RootLayout({

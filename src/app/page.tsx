@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { CineVerseHome } from "@/components/cineverse-home";
 import { getActiveProfileId } from "@/lib/active-profile";
 import { buildPersonalizedRecommendations } from "@/lib/recommendations";
@@ -9,6 +10,7 @@ export const dynamic = "force-dynamic";
 
 export default async function Home() {
   const profileId = await getActiveProfileId();
+  if (!profileId) redirect("/profiles?next=%2F");
   const progress = getContinueWatching(profileId);
   const likes = getLikes(profileId);
   const dislikes = getDislikes(profileId);

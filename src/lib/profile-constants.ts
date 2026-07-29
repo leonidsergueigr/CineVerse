@@ -1,6 +1,7 @@
-export const DEFAULT_PROFILE_ID = "local";
-export const PROFILE_COOKIE_NAME = "cineverse_profile";
+export const LEGACY_PROFILE_ID = "local";
+export const PROFILE_COOKIE_NAME = "cineverse_profile_session_v2";
 export const MAX_PROFILES = 8;
+export const PROFILE_PIN_LENGTH = 4;
 
 export const PROFILE_COLORS = [
   "#e50914",

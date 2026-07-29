@@ -3,16 +3,13 @@
 import {
   Check,
   LoaderCircle,
+  LockKeyhole,
   Plus,
-  Trash2,
+  Settings,
   UserRound,
 } from "lucide-react";
-import { type FormEvent, useEffect, useState } from "react";
-import {
-  DEFAULT_PROFILE_ID,
-  MAX_PROFILES,
-  PROFILE_COLORS,
-} from "@/lib/profile-constants";
+import { useEffect, useState } from "react";
+import { MAX_PROFILES } from "@/lib/profile-constants";
 import type { Profile } from "@/lib/types";
 
 type Props = {
@@ -22,16 +19,12 @@ type Props = {
 
 type ProfilesResponse = {
   items: Profile[];
-  activeProfileId: string;
+  activeProfileId: string | null;
 };
 
 export function ProfileSwitcher({ open, onOpenChange }: Props) {
   const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [activeProfileId, setActiveProfileId] =
-    useState(DEFAULT_PROFILE_ID);
-  const [creating, setCreating] = useState(false);
-  const [name, setName] = useState("");
-  const [color, setColor] = useState<string>(PROFILE_COLORS[0]);
+  const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState("");
 
@@ -44,8 +37,7 @@ export function ProfileSwitcher({ open, onOpenChange }: Props) {
         setActiveProfileId(data.activeProfileId);
       })
       .catch((loadError) => {
-        if (!active) return;
-        setError(errorMessage(loadError));
+        if (active) setError(errorMessage(loadError));
       });
     return () => {
       active = false;
@@ -53,79 +45,42 @@ export function ProfileSwitcher({ open, onOpenChange }: Props) {
   }, []);
 
   const activeProfile =
-    profiles.find((profile) => profile.id === activeProfileId) ?? profiles[0];
+    profiles.find((profile) => profile.id === activeProfileId) ?? null;
 
-  async function activateProfile(profileId: string) {
-    if (profileId === activeProfileId || busyId) {
+  async function chooseProfile(profile: Profile) {
+    if (profile.id === activeProfileId) {
       onOpenChange(false);
       return;
     }
-    setBusyId(profileId);
+    const nextPath = `${window.location.pathname}${window.location.search}`;
+    if (profile.hasPin) {
+      window.location.assign(
+        `/profiles?profile=${encodeURIComponent(profile.id)}&next=${encodeURIComponent(nextPath)}`,
+      );
+      return;
+    }
+
+    setBusyId(profile.id);
     setError("");
     try {
       const response = await fetch("/api/profiles", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: profileId, activate: true }),
+        body: JSON.stringify({ id: profile.id, activate: true }),
       });
       await expectSuccess(response);
       window.location.reload();
-    } catch (activateError) {
-      setError(errorMessage(activateError));
+    } catch (chooseError) {
+      setError(errorMessage(chooseError));
       setBusyId(null);
     }
   }
 
-  async function createNewProfile(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (busyId) return;
-    setBusyId("new");
-    setError("");
-    try {
-      const response = await fetch("/api/profiles", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name, color }),
-      });
-      await expectSuccess(response);
-      window.location.reload();
-    } catch (createError) {
-      setError(errorMessage(createError));
-      setBusyId(null);
-    }
-  }
-
-  async function removeProfile(profile: Profile) {
-    if (
-      profile.id === DEFAULT_PROFILE_ID ||
-      busyId ||
-      !window.confirm(
-        `Supprimer le profil « ${profile.name} » et toutes ses donnees personnelles ?`,
-      )
-    ) {
-      return;
-    }
-    setBusyId(profile.id);
-    setError("");
-    try {
-      const response = await fetch("/api/profiles", {
-        method: "DELETE",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: profile.id }),
-      });
-      await expectSuccess(response);
-      if (profile.id === activeProfileId) {
-        window.location.reload();
-        return;
-      }
-      const data = await fetchProfiles();
-      setProfiles(data.items);
-      setActiveProfileId(data.activeProfileId);
-      setBusyId(null);
-    } catch (deleteError) {
-      setError(errorMessage(deleteError));
-      setBusyId(null);
-    }
+  function openProfilePage(action: "create" | "manage") {
+    const destination = `${window.location.pathname}${window.location.search}`;
+    window.location.assign(
+      `/profiles?${action}=1&next=${encodeURIComponent(destination)}`,
+    );
   }
 
   return (
@@ -133,19 +88,19 @@ export function ProfileSwitcher({ open, onOpenChange }: Props) {
       <button
         type="button"
         onClick={() => onOpenChange(!open)}
-        aria-label={`Profil actif : ${activeProfile?.name ?? "Principal"}`}
+        aria-label={`Profil actif : ${activeProfile?.name ?? "Profil"}`}
         aria-expanded={open}
         className={`inline-flex h-10 items-center gap-2 rounded-full px-1.5 transition sm:px-2.5 ${
           open ? "bg-white text-black" : "text-zinc-300 hover:bg-white/10"
         }`}
       >
         <ProfileAvatar
-          name={activeProfile?.name ?? "Principal"}
-          color={activeProfile?.color ?? PROFILE_COLORS[0]}
+          name={activeProfile?.name ?? ""}
+          color={activeProfile?.color ?? "#292929"}
           small
         />
         <span className="hidden max-w-24 truncate text-xs font-bold xl:block">
-          {activeProfile?.name ?? "Principal"}
+          {activeProfile?.name ?? "Profil"}
         </span>
       </button>
 
@@ -153,7 +108,7 @@ export function ProfileSwitcher({ open, onOpenChange }: Props) {
         <div className="absolute right-0 top-[calc(100%+8px)] z-50 w-[min(19rem,calc(100vw-1.5rem))] rounded border border-white/15 bg-[#111] p-2 shadow-2xl">
           <div className="px-2 pb-2 pt-1">
             <p className="text-[11px] font-bold uppercase text-zinc-500">
-              Qui regarde ?
+              Changer de profil
             </p>
           </div>
 
@@ -162,124 +117,51 @@ export function ProfileSwitcher({ open, onOpenChange }: Props) {
               const active = profile.id === activeProfileId;
               const busy = busyId === profile.id;
               return (
-                <div
+                <button
                   key={profile.id}
-                  className={`grid grid-cols-[minmax(0,1fr)_auto] items-center rounded ${
+                  type="button"
+                  onClick={() => void chooseProfile(profile)}
+                  disabled={Boolean(busyId)}
+                  className={`flex min-w-0 items-center gap-3 rounded px-2 py-2 text-left transition disabled:opacity-60 ${
                     active ? "bg-white/10" : "hover:bg-white/[0.06]"
                   }`}
                 >
-                  <button
-                    type="button"
-                    onClick={() => void activateProfile(profile.id)}
-                    disabled={Boolean(busyId)}
-                    className="flex min-w-0 items-center gap-3 px-2 py-2 text-left disabled:opacity-60"
-                  >
-                    <ProfileAvatar name={profile.name} color={profile.color} />
-                    <span className="min-w-0 flex-1 truncate text-sm font-bold text-white">
-                      {profile.name}
-                    </span>
-                    {busy ? (
-                      <LoaderCircle className="h-4 w-4 animate-spin text-zinc-400" />
-                    ) : active ? (
-                      <Check className="h-4 w-4 text-[#e50914]" />
-                    ) : null}
-                  </button>
-                  {profile.id !== DEFAULT_PROFILE_ID ? (
-                    <button
-                      type="button"
-                      onClick={() => void removeProfile(profile)}
-                      disabled={Boolean(busyId)}
-                      aria-label={`Supprimer ${profile.name}`}
-                      title={`Supprimer ${profile.name}`}
-                      className="mr-1 inline-flex h-9 w-9 items-center justify-center rounded text-zinc-500 transition hover:bg-white/10 hover:text-white disabled:opacity-40"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
+                  <ProfileAvatar name={profile.name} color={profile.color} />
+                  <span className="min-w-0 flex-1 truncate text-sm font-bold text-white">
+                    {profile.name}
+                  </span>
+                  {busy ? (
+                    <LoaderCircle className="h-4 w-4 animate-spin text-zinc-400" />
+                  ) : active ? (
+                    <Check className="h-4 w-4 text-[#e50914]" />
+                  ) : profile.hasPin ? (
+                    <LockKeyhole className="h-4 w-4 text-zinc-500" />
                   ) : null}
-                </div>
+                </button>
               );
             })}
           </div>
 
-          {creating ? (
-            <form
-              onSubmit={createNewProfile}
-              className="mt-2 border-t border-white/10 px-2 pb-1 pt-3"
-            >
-              <label
-                htmlFor="new-profile-name"
-                className="mb-2 block text-xs font-bold text-zinc-400"
+          <div className="mt-2 grid border-t border-white/10 pt-2">
+            {profiles.length < MAX_PROFILES ? (
+              <button
+                type="button"
+                onClick={() => openProfilePage("create")}
+                className="inline-flex h-10 items-center gap-3 rounded px-3 text-sm font-bold text-zinc-300 transition hover:bg-white/[0.06] hover:text-white"
               >
+                <Plus className="h-4 w-4" />
                 Nouveau profil
-              </label>
-              <input
-                id="new-profile-name"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                autoFocus
-                maxLength={24}
-                placeholder="Nom du profil"
-                className="h-10 w-full rounded border border-white/15 bg-[#202020] px-3 text-sm text-white outline-none placeholder:text-zinc-600 focus:border-[#e50914]"
-              />
-              <div className="mt-3 flex items-center gap-2">
-                {PROFILE_COLORS.map((item) => (
-                  <button
-                    key={item}
-                    type="button"
-                    onClick={() => setColor(item)}
-                    aria-label={`Choisir la couleur ${item}`}
-                    aria-pressed={color === item}
-                    className={`h-7 w-7 rounded-full border-2 transition ${
-                      color === item
-                        ? "border-white"
-                        : "border-transparent opacity-70 hover:opacity-100"
-                    }`}
-                    style={{ backgroundColor: item }}
-                  />
-                ))}
-              </div>
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCreating(false);
-                    setError("");
-                  }}
-                  className="h-9 rounded bg-white/[0.06] text-xs font-bold text-zinc-300 hover:bg-white/10"
-                >
-                  Annuler
-                </button>
-                <button
-                  type="submit"
-                  disabled={name.trim().length < 2 || Boolean(busyId)}
-                  className="inline-flex h-9 items-center justify-center gap-2 rounded bg-[#e50914] text-xs font-bold text-white transition hover:bg-[#f6121d] disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {busyId === "new" ? (
-                    <LoaderCircle className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Plus className="h-4 w-4" />
-                  )}
-                  Creer
-                </button>
-              </div>
-            </form>
-          ) : profiles.length < MAX_PROFILES ? (
+              </button>
+            ) : null}
             <button
               type="button"
-              onClick={() => {
-                setCreating(true);
-                setError("");
-              }}
-              className="mt-2 inline-flex h-10 w-full items-center gap-3 border-t border-white/10 px-3 pt-2 text-sm font-bold text-zinc-300 transition hover:text-white"
+              onClick={() => openProfilePage("manage")}
+              className="inline-flex h-10 items-center gap-3 rounded px-3 text-sm font-bold text-zinc-300 transition hover:bg-white/[0.06] hover:text-white"
             >
-              <Plus className="h-4 w-4" />
-              Nouveau profil
+              <Settings className="h-4 w-4" />
+              Gerer les profils
             </button>
-          ) : (
-            <p className="mt-2 border-t border-white/10 px-3 pt-3 text-xs text-zinc-500">
-              Limite de {MAX_PROFILES} profils atteinte.
-            </p>
-          )}
+          </div>
 
           {error ? (
             <p role="alert" className="px-2 pb-1 pt-2 text-xs text-red-400">
@@ -316,16 +198,16 @@ function ProfileAvatar({
   );
 }
 
-async function expectSuccess(response: Response) {
-  const body = (await response.json()) as { error?: string };
-  if (!response.ok) throw new Error(body.error ?? "Operation impossible.");
-  return body;
-}
-
 async function fetchProfiles() {
   const response = await fetch("/api/profiles", { cache: "no-store" });
   if (!response.ok) throw new Error("Impossible de charger les profils.");
   return (await response.json()) as ProfilesResponse;
+}
+
+async function expectSuccess(response: Response) {
+  const body = (await response.json()) as { error?: string };
+  if (!response.ok) throw new Error(body.error ?? "Operation impossible.");
+  return body;
 }
 
 function errorMessage(error: unknown) {

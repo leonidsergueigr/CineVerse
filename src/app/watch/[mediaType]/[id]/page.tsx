@@ -1,4 +1,5 @@
-import { notFound } from "next/navigation";
+import type { Metadata } from "next";
+import { notFound, redirect } from "next/navigation";
 import { WatchExperience } from "@/components/watch-experience";
 import { getActiveProfileId } from "@/lib/active-profile";
 import {
@@ -33,6 +34,14 @@ export default async function WatchPage({ params, searchParams }: PageProps) {
   const id = Number(route.id);
   if (!Number.isFinite(id)) notFound();
   const profileId = await getActiveProfileId();
+  if (!profileId) {
+    const watchQuery =
+      route.mediaType === "tv"
+        ? `?season=${encodeURIComponent(query.season ?? "1")}&episode=${encodeURIComponent(query.episode ?? "1")}`
+        : "";
+    const destination = `/watch/${route.mediaType}/${route.id}${watchQuery}`;
+    redirect(`/profiles?next=${encodeURIComponent(destination)}`);
+  }
 
   const requestedSeason = mediaType === "tv" ? Number(query.season ?? 1) : null;
   const requestedEpisode = mediaType === "tv" ? Number(query.episode ?? 1) : null;
@@ -90,4 +99,28 @@ export default async function WatchPage({ params, searchParams }: PageProps) {
       initialSeriesProgress={seriesProgress}
     />
   );
+}
+
+export async function generateMetadata({
+  params,
+  searchParams,
+}: PageProps): Promise<Metadata> {
+  const route = await params;
+  const query = await searchParams;
+  if (route.mediaType !== "movie" && route.mediaType !== "tv") {
+    return { title: "Lecture" };
+  }
+  const id = Number(route.id);
+  if (!Number.isFinite(id)) return { title: "Lecture" };
+
+  try {
+    const detail = await getDetails(route.mediaType, id);
+    const episode =
+      route.mediaType === "tv"
+        ? ` - S${Number(query.season ?? 1)} E${Number(query.episode ?? 1)}`
+        : "";
+    return { title: `${detail.title}${episode}` };
+  } catch {
+    return { title: "Lecture" };
+  }
 }

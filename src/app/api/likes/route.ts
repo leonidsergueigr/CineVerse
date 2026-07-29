@@ -7,6 +7,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   const profileId = await getActiveProfileId();
+  if (!profileId) return profileRequired();
   return NextResponse.json({ items: getLikes(profileId) });
 }
 
@@ -17,6 +18,7 @@ export async function POST(request: NextRequest) {
   }
 
   const profileId = await getActiveProfileId();
+  if (!profileId) return profileRequired();
   setLike(profileId, {
     tmdbId: Number(body.tmdbId),
     mediaType: body.mediaType,
@@ -27,6 +29,13 @@ export async function POST(request: NextRequest) {
   });
 
   return NextResponse.json({ ok: true });
+}
+
+function profileRequired() {
+  return NextResponse.json(
+    { error: "Selectionnez un profil." },
+    { status: 401 },
+  );
 }
 
 function isMediaType(value: unknown): value is MediaType {

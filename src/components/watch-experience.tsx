@@ -121,6 +121,13 @@ export function WatchExperience({
     });
   }, [activeLanguage, autoNext, detail, episode, provider, season, started]);
 
+  useEffect(() => {
+    document.title =
+      detail.mediaType === "tv"
+        ? `${detail.title} - S${season} E${episode} | CineVerse`
+        : `${detail.title} | CineVerse`;
+  }, [detail.mediaType, detail.title, episode, season]);
+
   const savePlaybackProgress = useCallback(
     (
       currentTime: number,

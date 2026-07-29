@@ -1,3 +1,5 @@
+import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 import { BrowseExperience } from "@/components/cineverse-home";
 import { getActiveProfileId } from "@/lib/active-profile";
 import { getDislikes, getLikes } from "@/lib/store";
@@ -12,6 +14,10 @@ type PageProps = {
 export default async function BrowsePage({ searchParams }: PageProps) {
   const params = await searchParams;
   const profileId = await getActiveProfileId();
+  if (!profileId) {
+    const destination = browseDestination(params);
+    redirect(`/profiles?next=${encodeURIComponent(destination)}`);
+  }
   const likes = getLikes(profileId);
   const dislikes = getDislikes(profileId);
   const catalog = await getBrowseCatalog({
@@ -42,6 +48,28 @@ export default async function BrowsePage({ searchParams }: PageProps) {
   );
 }
 
+export async function generateMetadata({
+  searchParams,
+}: PageProps): Promise<Metadata> {
+  const params = await searchParams;
+  const query = valueOf(params.q)?.trim();
+  if (query) return { title: `Recherche : ${query}` };
+  if (valueOf(params.catalog) === "anime") return { title: "Animes" };
+  return { title: valueOf(params.type) === "tv" ? "Series" : "Films" };
+}
+
 function valueOf(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
+}
+
+function browseDestination(
+  params: Record<string, string | string[] | undefined>,
+) {
+  const search = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    const firstValue = Array.isArray(value) ? value[0] : value;
+    if (firstValue) search.set(key, firstValue);
+  });
+  const query = search.toString();
+  return query ? `/browse?${query}` : "/browse";
 }

@@ -22,6 +22,12 @@ export async function GET(request: Request) {
   }
 
   const profileId = await getActiveProfileId();
+  if (!profileId) {
+    return NextResponse.json(
+      { error: "Selectionnez un profil." },
+      { status: 401 },
+    );
+  }
   const [episodeInfo, seriesProgress] = await Promise.all([
     getEpisodeInfo(tmdbId, season, episode),
     Promise.resolve(

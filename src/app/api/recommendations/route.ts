@@ -7,6 +7,12 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   const profileId = await getActiveProfileId();
+  if (!profileId) {
+    return NextResponse.json(
+      { error: "Selectionnez un profil." },
+      { status: 401 },
+    );
+  }
   const result = await buildPersonalizedRecommendations(
     getLikes(profileId),
     getDislikes(profileId),
