@@ -5,6 +5,7 @@ import type {
   DislikeRecord,
   LikeRecord,
   MediaType,
+  SeriesProgressSummary,
   WatchProgress,
 } from "@/lib/types";
 
@@ -267,6 +268,42 @@ export function getProgress(
     .get(tmdbId, mediaType, seasonNumber, episodeNumber) as DbProgress | undefined;
 
   return row ? mapProgress(row) : null;
+}
+
+export function getSeriesProgressSummary(
+  tmdbId: number,
+  seasonNumber: number,
+  totalEpisodes: number,
+): SeriesProgressSummary {
+  const completedEpisodeNumbers = (
+    getDb()
+      .prepare(
+        `
+        select distinct episode_number
+        from watch_history
+        where user_id = 'local'
+          and tmdb_id = ?
+          and media_type = 'tv'
+          and season_number = ?
+          and completed = 1
+          and episode_number is not null
+        order by episode_number
+      `,
+      )
+      .all(tmdbId, seasonNumber) as Array<{ episode_number: number }>
+  )
+    .map((row) => row.episode_number)
+    .filter(
+      (episodeNumber) =>
+        episodeNumber >= 1 && episodeNumber <= Math.max(0, totalEpisodes),
+    );
+
+  return {
+    seasonNumber,
+    completedEpisodes: completedEpisodeNumbers.length,
+    totalEpisodes: Math.max(0, totalEpisodes),
+    completedEpisodeNumbers,
+  };
 }
 
 export function getContinueWatching(limit = 12): WatchProgress[] {

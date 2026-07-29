@@ -199,7 +199,7 @@ function scoreCandidate(
     (typeLikes / seeds.length) * 2 +
     qualityScore;
 
-  const sourceTitle = [...candidate.sourceTitles][0];
+  const sourceTitles = [...candidate.sourceTitles];
   const strongestGenre = item.genreIds
     .map((genreId) => ({
       name: genreName(item.mediaType, genreId),
@@ -207,13 +207,41 @@ function scoreCandidate(
     }))
     .filter(({ name }) => Boolean(name))
     .sort((a, b) => b.weight - a.weight)[0];
-  const reason = sourceTitle
-    ? `Parce que vous aimez ${sourceTitle}`
-    : strongestGenre?.name
-      ? `Dans vos genres favoris : ${strongestGenre.name}`
-      : "Selectionnee selon vos gouts";
+  const reason = recommendationReason(
+    item,
+    sourceTitles,
+    strongestGenre?.name ?? null,
+    candidate.recommendationHits + candidate.similarHits,
+  );
 
   return { ...item, reason, score: Number(score.toFixed(2)) };
+}
+
+function recommendationReason(
+  item: CatalogItem,
+  sourceTitles: string[],
+  strongestGenre: string | null,
+  tasteHits: number,
+) {
+  if (sourceTitles.length > 1 && tasteHits > 1) {
+    return `Recommande depuis ${sourceTitles[0]} et ${sourceTitles[1]}`;
+  }
+
+  const sourceTitle = sourceTitles[0];
+  if (sourceTitle) {
+    const variants = [
+      `Parce que ${sourceTitle} vous a plu`,
+      strongestGenre
+        ? `${strongestGenre}, dans la veine de ${sourceTitle}`
+        : `Dans la veine de ${sourceTitle}`,
+      `Une piste proche de ${sourceTitle}`,
+    ];
+    return variants[Math.abs(item.id) % variants.length];
+  }
+
+  return strongestGenre
+    ? `Dans vos genres favoris : ${strongestGenre}`
+    : "Selectionnee selon vos gouts";
 }
 
 function diversify(

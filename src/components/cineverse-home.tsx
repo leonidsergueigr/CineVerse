@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import {
+  ChevronLeft,
   ChevronRight,
   Heart,
   LoaderCircle,
@@ -10,6 +11,7 @@ import {
   ThumbsDown,
   X,
 } from "lucide-react";
+import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { GENRES, LANGUAGES, SERIES_GENRES } from "@/lib/genres";
 import type {
@@ -234,10 +236,12 @@ export function CineVerseHome({
                 {hero.mediaType === "movie" ? "FILM" : "SERIE"}
               </span>
               <span>{yearOf(hero.releaseDate)}</span>
-              <span className="inline-flex items-center gap-1">
-                <Star className="h-4 w-4 fill-[#f5c542] text-[#f5c542]" />
-                {hero.voteAverage.toFixed(1)}
-              </span>
+              {hero.voteCount > 0 && hero.voteAverage > 0 ? (
+                <span className="inline-flex items-center gap-1">
+                  <Star className="h-4 w-4 fill-[#f5c542] text-[#f5c542]" />
+                  {hero.voteAverage.toFixed(1)}
+                </span>
+              ) : null}
             </div>
             <h1 className="text-5xl font-black leading-none tracking-normal sm:text-7xl">
               {hero.title}
@@ -306,7 +310,7 @@ export function CineVerseHome({
                 <LoaderCircle className="h-4 w-4 animate-spin text-zinc-500" />
               ) : null}
             </div>
-            <div className="scrollbar-none grid auto-cols-[150px] grid-flow-col gap-3 overflow-x-auto pb-2 sm:auto-cols-[190px]">
+            <HorizontalCarousel label={section.title}>
               {section.items.map((item) => (
                 <MediaCard
                   key={`${section.id}-${item.mediaType}-${item.id}`}
@@ -322,11 +326,57 @@ export function CineVerseHome({
                   }
                 />
               ))}
-            </div>
+            </HorizontalCarousel>
           </section>
         ))}
       </div>
     </main>
+  );
+}
+
+function HorizontalCarousel({
+  children,
+  label,
+}: {
+  children: ReactNode;
+  label: string;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  function scroll(direction: -1 | 1) {
+    const container = scrollRef.current;
+    if (!container) return;
+    container.scrollBy({
+      left: direction * Math.max(320, container.clientWidth * 0.82),
+      behavior: "smooth",
+    });
+  }
+
+  return (
+    <div className="group/carousel relative">
+      <button
+        type="button"
+        onClick={() => scroll(-1)}
+        className="absolute left-2 top-[42%] z-20 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-black/90 text-white opacity-0 shadow-xl ring-1 ring-white/20 transition hover:bg-white hover:text-black focus:opacity-100 group-hover/carousel:opacity-100 md:inline-flex"
+        aria-label={`Faire defiler ${label} vers la gauche`}
+      >
+        <ChevronLeft className="h-5 w-5" />
+      </button>
+      <div
+        ref={scrollRef}
+        className="scrollbar-none grid auto-cols-[150px] grid-flow-col gap-3 overflow-x-auto pb-2 sm:auto-cols-[190px]"
+      >
+        {children}
+      </div>
+      <button
+        type="button"
+        onClick={() => scroll(1)}
+        className="absolute right-2 top-[42%] z-20 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-black/90 text-white opacity-0 shadow-xl ring-1 ring-white/20 transition hover:bg-white hover:text-black focus:opacity-100 group-hover/carousel:opacity-100 md:inline-flex"
+        aria-label={`Faire defiler ${label} vers la droite`}
+      >
+        <ChevronRight className="h-5 w-5" />
+      </button>
+    </div>
   );
 }
 
@@ -745,12 +795,12 @@ function MediaCard({
               <span className="text-sm font-black leading-tight">{item.title}</span>
             </div>
           )}
-          <div className="absolute left-2 top-2 inline-flex h-8 items-center gap-1 rounded bg-black/85 px-2 text-xs font-black text-white shadow-lg ring-1 ring-white/20 backdrop-blur">
-            <Star className="h-3.5 w-3.5 fill-[#f5c542] text-[#f5c542]" />
-            {item.voteCount > 0 || item.voteAverage > 0
-              ? item.voteAverage.toFixed(1)
-              : "N/A"}
-          </div>
+          {item.voteCount > 0 && item.voteAverage > 0 ? (
+            <div className="absolute left-2 top-2 inline-flex h-8 items-center gap-1 rounded bg-black/85 px-2 text-xs font-black text-white shadow-lg ring-1 ring-white/20 backdrop-blur">
+              <Star className="h-3.5 w-3.5 fill-[#f5c542] text-[#f5c542]" />
+              {item.voteAverage.toFixed(1)}
+            </div>
+          ) : null}
           <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-black/80 to-transparent" />
           {item.resume ? (
             <div className="absolute inset-x-0 bottom-0 h-1.5 bg-white/25">
@@ -761,8 +811,18 @@ function MediaCard({
             </div>
           ) : null}
         </div>
-        <div className={compact ? "min-h-16 p-2" : reason ? "min-h-28 p-3" : "min-h-20 p-3"}>
-          <h3 className="line-clamp-2 text-sm font-bold leading-5">{item.title}</h3>
+        <div
+          className={
+            compact
+              ? "min-h-[76px] p-2"
+              : reason
+                ? "min-h-32 p-3"
+                : "min-h-24 p-3"
+          }
+        >
+          <h3 className="line-clamp-2 min-h-10 text-sm font-bold leading-5">
+            {item.title}
+          </h3>
           <p className="mt-1 text-xs text-zinc-400">
             {item.resume
               ? resumeLabel(item)

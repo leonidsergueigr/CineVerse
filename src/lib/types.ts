@@ -94,6 +94,18 @@ export type WatchProgress = {
   updatedAt: string;
 };
 
+export type EpisodeInfo = {
+  name: string;
+  runtime: number | null;
+};
+
+export type SeriesProgressSummary = {
+  seasonNumber: number;
+  completedEpisodes: number;
+  totalEpisodes: number;
+  completedEpisodeNumbers: number[];
+};
+
 export type SearchSuggestion = {
   id: number;
   kind: MediaType | "person";

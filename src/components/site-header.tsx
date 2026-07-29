@@ -10,7 +10,7 @@ import {
   Tv,
   UserRound,
 } from "lucide-react";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { GENRES, LANGUAGES, SERIES_GENRES } from "@/lib/genres";
 import type { SearchSuggestion } from "@/lib/types";
 
@@ -182,6 +182,18 @@ function SearchBox({
   const [loading, setLoading] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
   const requestRef = useRef<AbortController | null>(null);
+  const suggestionGroups = useMemo(() => {
+    const titles = items.filter((item) => item.kind !== "person");
+    const people = items.filter((item) => item.kind === "person");
+    return [
+      ...(titles.length ? [{ label: "Titres", items: titles }] : []),
+      ...(people.length ? [{ label: "Personnes", items: people }] : []),
+    ];
+  }, [items]);
+  const displayedItems = useMemo(
+    () => suggestionGroups.flatMap((group) => group.items),
+    [suggestionGroups],
+  );
 
   useEffect(() => {
     const search = value.trim();
@@ -228,9 +240,9 @@ function SearchBox({
       className="relative w-full"
       onSubmit={(event) => {
         if (!value.trim()) event.preventDefault();
-        if (activeIndex >= 0 && items[activeIndex]) {
+        if (activeIndex >= 0 && displayedItems[activeIndex]) {
           event.preventDefault();
-          navigate(items[activeIndex].href);
+          navigate(displayedItems[activeIndex].href);
         }
       }}
     >
@@ -266,14 +278,17 @@ function SearchBox({
           }
         }}
         onKeyDown={(event) => {
-          if (!open || !items.length) return;
+          if (!open || !displayedItems.length) return;
           if (event.key === "ArrowDown") {
             event.preventDefault();
-            setActiveIndex((index) => (index + 1) % items.length);
+            setActiveIndex(
+              (index) => (index + 1) % displayedItems.length,
+            );
           } else if (event.key === "ArrowUp") {
             event.preventDefault();
             setActiveIndex(
-              (index) => (index <= 0 ? items.length - 1 : index - 1),
+              (index) =>
+                index <= 0 ? displayedItems.length - 1 : index - 1,
             );
           } else if (event.key === "Escape") {
             setOpen(false);
@@ -292,44 +307,56 @@ function SearchBox({
           role="listbox"
           className="absolute inset-x-0 top-[calc(100%+8px)] z-50 max-h-[min(68vh,34rem)] overflow-y-auto rounded border border-white/15 bg-[#111] p-1.5 shadow-2xl"
         >
-          {items.map((item, index) => (
-            <button
-              key={`${item.kind}-${item.id}`}
-              id={`${suggestionsId}-option-${index}`}
-              type="button"
-              role="option"
-              aria-selected={activeIndex === index}
-              onMouseDown={(event) => event.preventDefault()}
-              onMouseEnter={() => setActiveIndex(index)}
-              onClick={() => navigate(item.href)}
-              className={`grid min-h-16 w-full grid-cols-[42px_minmax(0,1fr)] items-center gap-3 rounded px-2 py-1.5 text-left transition ${
-                activeIndex === index ? "bg-white/10" : "hover:bg-white/[0.07]"
-              }`}
-            >
-              <span className="grid h-14 w-[42px] place-items-center overflow-hidden rounded bg-zinc-900 ring-1 ring-white/10">
-                {item.imageUrl ? (
-                  <img
-                    src={item.imageUrl}
-                    alt=""
-                    className="h-full w-full object-cover"
-                  />
-                ) : item.kind === "movie" ? (
-                  <Clapperboard className="h-4 w-4 text-zinc-500" />
-                ) : item.kind === "tv" ? (
-                  <Tv className="h-4 w-4 text-zinc-500" />
-                ) : (
-                  <UserRound className="h-4 w-4 text-zinc-500" />
-                )}
-              </span>
-              <span className="min-w-0">
-                <span className="block truncate text-sm font-bold text-white">
-                  {item.title}
-                </span>
-                <span className="mt-1 block truncate text-xs text-zinc-500">
-                  {item.subtitle}
-                </span>
-              </span>
-            </button>
+          {suggestionGroups.map((group) => (
+            <div key={group.label} role="presentation">
+              <div className="px-3 pb-1 pt-2 text-[11px] font-bold uppercase text-zinc-500">
+                {group.label}
+              </div>
+              {group.items.map((item) => {
+                const index = displayedItems.indexOf(item);
+                return (
+                  <button
+                    key={`${item.kind}-${item.id}`}
+                    id={`${suggestionsId}-option-${index}`}
+                    type="button"
+                    role="option"
+                    aria-selected={activeIndex === index}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onMouseEnter={() => setActiveIndex(index)}
+                    onClick={() => navigate(item.href)}
+                    className={`grid min-h-16 w-full grid-cols-[42px_minmax(0,1fr)] items-center gap-3 rounded px-2 py-1.5 text-left transition ${
+                      activeIndex === index
+                        ? "bg-white/10"
+                        : "hover:bg-white/[0.07]"
+                    }`}
+                  >
+                    <span className="grid h-14 w-[42px] place-items-center overflow-hidden rounded bg-zinc-900 ring-1 ring-white/10">
+                      {item.imageUrl ? (
+                        <img
+                          src={item.imageUrl}
+                          alt=""
+                          className="h-full w-full object-cover"
+                        />
+                      ) : item.kind === "movie" ? (
+                        <Clapperboard className="h-4 w-4 text-zinc-500" />
+                      ) : item.kind === "tv" ? (
+                        <Tv className="h-4 w-4 text-zinc-500" />
+                      ) : (
+                        <UserRound className="h-4 w-4 text-zinc-500" />
+                      )}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-bold text-white">
+                        {item.title}
+                      </span>
+                      <span className="mt-1 block truncate text-xs text-zinc-500">
+                        {item.subtitle}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
           ))}
           {!loading && !items.length ? (
             <div className="px-4 py-6 text-center text-sm text-zinc-500">
@@ -365,7 +392,7 @@ function BrowseMenu({
   const title = isAnime ? "Animes" : isMovie ? "Films" : "Series";
 
   return (
-    <div className="absolute inset-x-0 top-full border-b border-white/10 bg-black/95 shadow-2xl">
+    <div className="absolute inset-x-0 top-full border-b border-white/10 bg-[#050505]/[.985] shadow-2xl backdrop-blur-2xl">
       <div className="mx-auto max-h-[calc(100vh-5rem)] max-w-6xl overflow-y-auto px-4 py-5 sm:px-6 lg:px-8">
         <div className="mb-4 flex items-center justify-between border-b border-white/10 pb-4">
           <div>

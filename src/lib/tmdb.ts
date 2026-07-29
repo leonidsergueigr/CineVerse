@@ -11,6 +11,7 @@ import type {
   BrowseCatalog,
   CatalogFilters,
   CatalogItem,
+  EpisodeInfo,
   HomeCatalog,
   MediaDetails,
   MediaType,
@@ -100,6 +101,11 @@ type TmdbDetails = TmdbResult & {
     season_number: number;
     episode_count: number;
   }>;
+};
+
+type TmdbEpisodeDetails = {
+  name?: string;
+  runtime?: number | null;
 };
 
 type SourceCatalogItem = {
@@ -300,16 +306,27 @@ export async function searchWithMeta(
     type === "multi" ? undefined : type,
     20,
   );
-  if (!fuzzyMatches.length) return result;
-
-  const items = uniqueCatalogItems([...result.items, ...fuzzyMatches]).slice(
-    0,
-    20,
+  const rankedItems = rankCatalogSearchResults(
+    uniqueCatalogItems([...result.items, ...fuzzyMatches]),
+    query,
   );
+  const hasExactTitle = rankedItems.some(
+    (item) =>
+      normalizeSearchText(item.title) === normalizeSearchText(query),
+  );
+  const items = hasExactTitle
+    ? rankedItems
+        .filter((item) => titleSearchRelevance(item.title, query) > 0)
+        .slice(0, 10)
+    : rankedItems.slice(0, 20);
+
   return {
     ...result,
     items,
-    totalResults: Math.max(result.totalResults, items.length),
+    totalPages: hasExactTitle ? 1 : result.totalPages,
+    totalResults: hasExactTitle
+      ? items.length
+      : Math.max(result.totalResults, items.length),
   };
 }
 
@@ -362,14 +379,33 @@ export async function getSearchSuggestions(
     ...fuzzy.map(catalogSuggestion),
   ];
   const seen = new Set<string>();
-  return suggestions
+  const uniqueSuggestions = suggestions
     .filter((suggestion) => {
       const key = `${suggestion.kind}:${suggestion.id}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
-    })
-    .slice(0, limit);
+    });
+  const titleSuggestions = uniqueSuggestions
+    .filter((suggestion) => suggestion.kind !== "person")
+    .sort(
+      (left, right) =>
+        titleSearchRelevance(right.title, normalizedQuery) -
+        titleSearchRelevance(left.title, normalizedQuery),
+    );
+  const peopleSuggestions = uniqueSuggestions
+    .filter((suggestion) => suggestion.kind === "person")
+    .sort(
+      (left, right) =>
+        titleSearchRelevance(right.title, normalizedQuery) -
+        titleSearchRelevance(left.title, normalizedQuery),
+    );
+  const peopleLimit = peopleSuggestions.length ? Math.min(2, limit) : 0;
+
+  return [
+    ...titleSuggestions.slice(0, limit - peopleLimit),
+    ...peopleSuggestions.slice(0, peopleLimit),
+  ];
 }
 
 async function getFuzzyCatalogMatches(
@@ -390,6 +426,47 @@ async function getFuzzyCatalogMatches(
     minMatchCharLength: 2,
   });
   return fuse.search(query, { limit }).map((result) => result.item);
+}
+
+function rankCatalogSearchResults(items: CatalogItem[], query: string) {
+  return items
+    .map((item, index) => ({
+      item,
+      index,
+      relevance: titleSearchRelevance(item.title, query),
+    }))
+    .sort(
+      (left, right) =>
+        right.relevance - left.relevance ||
+        right.item.popularity - left.item.popularity ||
+        left.index - right.index,
+    )
+    .map(({ item }) => item);
+}
+
+function titleSearchRelevance(title: string, query: string) {
+  const normalizedTitle = normalizeSearchText(title);
+  const normalizedQuery = normalizeSearchText(query);
+  if (!normalizedTitle || !normalizedQuery) return 0;
+  if (normalizedTitle === normalizedQuery) return 10_000;
+  if (normalizedTitle.startsWith(`${normalizedQuery} `)) return 4_000;
+  if (normalizedTitle.includes(normalizedQuery)) return 2_500;
+
+  const queryTokens = normalizedQuery.split(" ").filter(Boolean);
+  const titleTokens = new Set(normalizedTitle.split(" ").filter(Boolean));
+  const matchingTokens = queryTokens.filter((token) => titleTokens.has(token));
+  if (!matchingTokens.length) return 0;
+
+  return Math.round((matchingTokens.length / queryTokens.length) * 1_000);
+}
+
+function normalizeSearchText(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLocaleLowerCase("fr")
+    .replace(/[^\p{Letter}\p{Number}]+/gu, " ")
+    .trim();
 }
 
 function getFuzzySearchPool() {
@@ -473,6 +550,26 @@ export async function getDetails(mediaType: MediaType, id: number): Promise<Medi
       seasonNumber: season.season_number,
       episodeCount: season.episode_count,
     })),
+  };
+}
+
+export async function getEpisodeInfo(
+  tvId: number,
+  seasonNumber: number,
+  episodeNumber: number,
+): Promise<EpisodeInfo | null> {
+  const data = await tmdb<TmdbEpisodeDetails>(
+    `/tv/${tvId}/season/${seasonNumber}/episode/${episodeNumber}`,
+    {},
+  );
+  if (!data) return null;
+
+  return {
+    name: data.name ?? `Episode ${episodeNumber}`,
+    runtime:
+      typeof data.runtime === "number" && data.runtime > 0
+        ? data.runtime
+        : null,
   };
 }
 

@@ -7,14 +7,20 @@ import {
   Heart,
   Languages,
   Play,
+  SkipForward,
   Star,
   ThumbsDown,
-  ToggleRight,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { buildEmbedUrl, getProviderLanguages } from "@/lib/providers";
 import { SiteHeader } from "@/components/site-header";
-import type { EmbedProvider, MediaDetails, WatchProgress } from "@/lib/types";
+import type {
+  EmbedProvider,
+  EpisodeInfo,
+  MediaDetails,
+  SeriesProgressSummary,
+  WatchProgress,
+} from "@/lib/types";
 
 type Props = {
   detail: MediaDetails;
@@ -24,6 +30,8 @@ type Props = {
   initialDisliked: boolean;
   initialSeason: number | null;
   initialEpisode: number | null;
+  initialEpisodeInfo: EpisodeInfo | null;
+  initialSeriesProgress: SeriesProgressSummary | null;
 };
 
 export function WatchExperience({
@@ -34,6 +42,8 @@ export function WatchExperience({
   initialDisliked,
   initialSeason,
   initialEpisode,
+  initialEpisodeInfo,
+  initialSeriesProgress,
 }: Props) {
   const availableSeasons = useMemo(
     () =>
@@ -64,6 +74,8 @@ export function WatchExperience({
     currentTime: initialProgress?.progressSeconds ?? 0,
     duration: initialProgress?.durationSeconds ?? 0,
   });
+  const [episodeInfo, setEpisodeInfo] = useState(initialEpisodeInfo);
+  const [seriesProgress, setSeriesProgress] = useState(initialSeriesProgress);
   const [, startTransition] = useTransition();
   const lastSaveRef = useRef(0);
   const autoAdvancedRef = useRef("");
@@ -83,6 +95,12 @@ export function WatchExperience({
   const episodeOptions = Array.from(
     { length: selectedSeason?.episodeCount ?? 1 },
     (_, index) => index + 1,
+  );
+  const activeRuntime =
+    detail.mediaType === "movie" ? detail.runtime : episodeInfo?.runtime ?? null;
+  const estimatedDurationSeconds = Math.max(
+    60,
+    (activeRuntime ?? (detail.mediaType === "movie" ? 110 : 45)) * 60,
   );
   const seriesEpisodeCounts = useMemo(
     () =>
@@ -130,6 +148,28 @@ export function WatchExperience({
     },
     [detail, episode, season, seriesEpisodeCounts],
   );
+
+  const completeCurrentEpisode = useCallback(() => {
+    if (detail.mediaType !== "tv") return;
+    setSeriesProgress((current) => {
+      if (
+        !current ||
+        current.seasonNumber !== season ||
+        current.completedEpisodeNumbers.includes(episode)
+      ) {
+        return current;
+      }
+
+      return {
+        ...current,
+        completedEpisodes: current.completedEpisodes + 1,
+        completedEpisodeNumbers: [
+          ...current.completedEpisodeNumbers,
+          episode,
+        ].sort((left, right) => left - right),
+      };
+    });
+  }, [detail.mediaType, episode, season]);
 
   const advanceEpisode = useCallback(() => {
     if (!autoNext || detail.mediaType !== "tv") return false;
@@ -203,6 +243,7 @@ export function WatchExperience({
           duration,
           true,
         );
+        completeCurrentEpisode();
         advanceEpisode();
         return;
       }
@@ -213,21 +254,28 @@ export function WatchExperience({
 
       fallbackProgressRef.current = currentTime;
       setProgress({ currentTime, duration });
-      if (isNearPlaybackEnd(detail.mediaType, currentTime, duration)) {
+      const nearEnd = isNearPlaybackEnd(
+        detail.mediaType,
+        currentTime,
+        duration,
+      );
+      if (nearEnd) {
         setCompleted(true);
+        completeCurrentEpisode();
       }
       maybeAutoAdvance(currentTime, duration);
       const now = Date.now();
       if (now - lastSaveRef.current < 9000) return;
       lastSaveRef.current = now;
 
-      savePlaybackProgress(currentTime, duration);
+      savePlaybackProgress(currentTime, duration, nearEnd);
     }
 
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
   }, [
     advanceEpisode,
+    completeCurrentEpisode,
     detail.mediaType,
     maybeAutoAdvance,
     progress.duration,
@@ -243,7 +291,6 @@ export function WatchExperience({
       return;
     }
 
-    const estimatedDuration = Math.max(60, (detail.runtime ?? 45) * 60);
     let ticksSinceSave = 0;
 
     const timer = window.setInterval(() => {
@@ -255,27 +302,30 @@ export function WatchExperience({
       }
 
       const currentTime = Math.min(
-        estimatedDuration,
+        estimatedDurationSeconds,
         fallbackProgressRef.current + 5,
       );
       fallbackProgressRef.current = currentTime;
       ticksSinceSave += 1;
-      setProgress({ currentTime, duration: estimatedDuration });
+      setProgress({ currentTime, duration: estimatedDurationSeconds });
 
       const nearEnd = isNearPlaybackEnd(
         detail.mediaType,
         currentTime,
-        estimatedDuration,
+        estimatedDurationSeconds,
       );
-      if (nearEnd) setCompleted(true);
+      if (nearEnd) {
+        setCompleted(true);
+        completeCurrentEpisode();
+      }
       if (nearEnd || ticksSinceSave >= 3) {
-        savePlaybackProgress(currentTime, estimatedDuration, nearEnd);
+        savePlaybackProgress(currentTime, estimatedDurationSeconds, nearEnd);
         ticksSinceSave = 0;
       }
       if (
         autoNext &&
         detail.mediaType === "tv" &&
-        currentTime / estimatedDuration >= 0.98
+        currentTime / estimatedDurationSeconds >= 0.98
       ) {
         advanceEpisode();
       }
@@ -285,8 +335,9 @@ export function WatchExperience({
   }, [
     advanceEpisode,
     autoNext,
+    completeCurrentEpisode,
     detail.mediaType,
-    detail.runtime,
+    estimatedDurationSeconds,
     playerLoadToken,
     provider?.supportsTracking,
     savePlaybackProgress,
@@ -356,7 +407,6 @@ export function WatchExperience({
     trackingDetectedRef.current = false;
     autoAdvancedRef.current = "";
     replaceEpisodeUrl(nextSeason, 1);
-    void loadStoredProgress(nextSeason, 1);
   }
 
   function changeEpisode(nextEpisode: number) {
@@ -367,7 +417,6 @@ export function WatchExperience({
     trackingDetectedRef.current = false;
     autoAdvancedRef.current = "";
     replaceEpisodeUrl(season, nextEpisode);
-    void loadStoredProgress(season, nextEpisode);
   }
 
   function startPlayback() {
@@ -375,47 +424,108 @@ export function WatchExperience({
     if (progress.currentTime > 0) return;
     fallbackProgressRef.current = 1;
     setProgress((current) => ({ ...current, currentTime: 1 }));
-    savePlaybackProgress(1, progress.duration);
+    savePlaybackProgress(
+      1,
+      progress.duration || (activeRuntime ? activeRuntime * 60 : 0),
+    );
   }
 
   function markAsWatched() {
-    const duration = Math.max(progress.duration, (detail.runtime ?? 45) * 60);
+    const duration = Math.max(progress.duration, estimatedDurationSeconds);
     fallbackProgressRef.current = duration;
     setCompleted(true);
     setProgress({ currentTime: duration, duration });
     savePlaybackProgress(duration, duration, true);
+    completeCurrentEpisode();
     if (detail.mediaType === "tv" && autoNext) advanceEpisode();
   }
 
-  async function loadStoredProgress(
-    nextSeason: number,
-    nextEpisode: number,
-  ) {
-    try {
+  useEffect(() => {
+    if (detail.mediaType !== "tv") return;
+    const controller = new AbortController();
+
+    async function loadEpisodeState() {
       const params = new URLSearchParams({
         tmdbId: String(detail.id),
         mediaType: detail.mediaType,
-        season: String(nextSeason),
-        episode: String(nextEpisode),
+        season: String(season),
+        episode: String(episode),
       });
-      const response = await fetch(`/api/progress?${params.toString()}`);
-      if (!response.ok) return;
-      const payload = (await response.json()) as {
-        progress?: WatchProgress | null;
-      };
-      if (!payload.progress) return;
-      fallbackProgressRef.current = payload.progress.progressSeconds;
-      setProgress({
-        currentTime: payload.progress.progressSeconds,
-        duration: payload.progress.durationSeconds,
+      const episodeParams = new URLSearchParams({
+        tmdbId: String(detail.id),
+        season: String(season),
+        episode: String(episode),
+        totalEpisodes: String(selectedSeason?.episodeCount ?? 0),
       });
-      setCompleted(payload.progress.completed);
-    } catch {
-      // The selected episode remains playable even if history is unavailable.
-    }
-  }
+      const [progressResponse, episodeResponse] = await Promise.all([
+        fetch(`/api/progress?${params.toString()}`, {
+          signal: controller.signal,
+        }),
+        fetch(`/api/media/episode?${episodeParams.toString()}`, {
+          signal: controller.signal,
+        }),
+      ]);
+      if (controller.signal.aborted) return;
 
-  const percent = progress.duration ? Math.min(100, (progress.currentTime / progress.duration) * 100) : 0;
+      const progressPayload = progressResponse.ok
+        ? ((await progressResponse.json()) as {
+        progress?: WatchProgress | null;
+          })
+        : { progress: null };
+      const episodePayload = episodeResponse.ok
+        ? ((await episodeResponse.json()) as {
+            episodeInfo?: EpisodeInfo | null;
+            seriesProgress?: SeriesProgressSummary | null;
+          })
+        : {};
+
+      const storedProgress = progressPayload.progress;
+      fallbackProgressRef.current = storedProgress?.progressSeconds ?? 0;
+      setProgress({
+        currentTime: storedProgress?.progressSeconds ?? 0,
+        duration: storedProgress?.durationSeconds ?? 0,
+      });
+      setCompleted(storedProgress?.completed ?? false);
+      setEpisodeInfo(episodePayload.episodeInfo ?? null);
+      setSeriesProgress((current) => {
+        const incoming = episodePayload.seriesProgress ?? null;
+        if (
+          current &&
+          incoming &&
+          current.seasonNumber === incoming.seasonNumber &&
+          current.completedEpisodes > incoming.completedEpisodes
+        ) {
+          return current;
+        }
+        return incoming;
+      });
+    }
+
+    void loadEpisodeState().catch(() => {
+      // The selected episode remains playable even if its metadata is unavailable.
+    });
+    return () => controller.abort();
+  }, [
+    detail.id,
+    detail.mediaType,
+    episode,
+    season,
+    selectedSeason?.episodeCount,
+  ]);
+
+  const displayedDuration =
+    progress.duration || (activeRuntime ? activeRuntime * 60 : 0);
+  const percent = displayedDuration
+    ? Math.min(100, (progress.currentTime / displayedDuration) * 100)
+    : 0;
+  const seriesPercent =
+    seriesProgress?.totalEpisodes
+      ? Math.min(
+          100,
+          (seriesProgress.completedEpisodes / seriesProgress.totalEpisodes) *
+            100,
+        )
+      : 0;
   const isAnime =
     detail.mediaType === "tv" &&
     detail.originalLanguage === "ja" &&
@@ -504,11 +614,18 @@ export function WatchExperience({
               <section className="min-w-0 overflow-hidden">
                 <div className="mb-3 flex flex-wrap items-center gap-3 text-sm text-zinc-300">
                   <span>{detail.mediaType === "movie" ? "Film" : "Serie"}</span>
-                  <span className="inline-flex items-center gap-1">
-                    <Star className="h-4 w-4 fill-[#f5c542] text-[#f5c542]" />
-                    {detail.voteAverage.toFixed(1)}
-                  </span>
-                  {detail.runtime ? <span>{detail.runtime} min</span> : null}
+                  {detail.voteCount > 0 && detail.voteAverage > 0 ? (
+                    <span className="inline-flex items-center gap-1">
+                      <Star className="h-4 w-4 fill-[#f5c542] text-[#f5c542]" />
+                      {detail.voteAverage.toFixed(1)}
+                    </span>
+                  ) : null}
+                  {detail.mediaType === "tv" ? (
+                    <span>
+                      Saison {season} · Episode {episode}
+                    </span>
+                  ) : null}
+                  {activeRuntime ? <span>{activeRuntime} min</span> : null}
                 </div>
                 <h1 className="text-3xl font-black tracking-normal sm:text-5xl">{detail.title}</h1>
                 <p className="mt-4 max-w-3xl text-sm leading-6 text-zinc-300 sm:text-base">
@@ -585,129 +702,186 @@ export function WatchExperience({
                 ) : null}
               </section>
 
-              <aside className="order-first grid min-w-0 content-start gap-3 rounded bg-zinc-950 p-4 ring-1 ring-white/10 lg:order-none lg:col-span-2 xl:col-span-1">
-                <div className="grid grid-cols-[repeat(auto-fit,minmax(88px,1fr))] gap-2">
-                  {providers.map((item) => (
+              <aside className="order-first min-w-0 rounded bg-zinc-950 p-4 ring-1 ring-white/10 lg:order-none lg:col-span-2 xl:col-span-1">
+                <section>
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <h2 className="text-xs font-bold uppercase text-zinc-500">
+                      Lecture
+                    </h2>
+                    <span className="truncate rounded bg-white/10 px-2 py-1 text-[11px] font-bold text-zinc-200">
+                      Source : {provider?.name ?? "Indisponible"}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-[repeat(auto-fit,minmax(88px,1fr))] gap-2">
+                    {providers.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => {
+                          trackingDetectedRef.current = false;
+                          setProviderId(item.id);
+                        }}
+                        className={`h-9 rounded border px-3 text-xs font-bold transition ${
+                          providerId === item.id
+                            ? "border-[#e50914] bg-[#e50914] text-white"
+                            : "border-white/10 bg-white/[0.06] text-zinc-300 hover:text-white"
+                        }`}
+                      >
+                        {item.name}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="mt-3 grid grid-cols-[auto_1fr] items-center gap-3">
+                    <Languages className="h-4 w-4 text-zinc-400" />
+                    <select
+                      value={activeLanguage}
+                      onChange={(event) => setLanguage(event.target.value)}
+                      className="control-field w-full"
+                      aria-label="Langue de lecture"
+                    >
+                      {languageOptions.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  {detail.mediaType === "tv" ? (
+                    <>
+                      <div className="mt-3 grid grid-cols-2 gap-3">
+                        <select
+                          value={season}
+                          onChange={(event) =>
+                            changeSeason(Number(event.target.value))
+                          }
+                          className="control-field w-full"
+                          aria-label="Saison"
+                        >
+                          {availableSeasons.map((item) => (
+                            <option key={item.id} value={item.seasonNumber}>
+                              Saison {item.seasonNumber}
+                            </option>
+                          ))}
+                        </select>
+                        <select
+                          value={episode}
+                          onChange={(event) =>
+                            changeEpisode(Number(event.target.value))
+                          }
+                          className="control-field w-full"
+                          aria-label="Episode"
+                        >
+                          {episodeOptions.map((episodeNumber) => (
+                            <option key={episodeNumber} value={episodeNumber}>
+                              Episode {episodeNumber}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setAutoNext((current) => !current)}
+                        aria-pressed={autoNext}
+                        className={`mt-3 flex h-10 w-full items-center justify-between rounded px-3 text-sm font-bold transition ${
+                          autoNext
+                            ? "bg-[#e50914] text-white"
+                            : "bg-white/[0.06] text-zinc-200 ring-1 ring-white/10 hover:bg-white/10"
+                        }`}
+                      >
+                        <span className="inline-flex items-center gap-2">
+                          <SkipForward className="h-4 w-4" />
+                          Episode suivant
+                        </span>
+                        <span className="text-xs">
+                          {autoNext ? "Active" : "Desactive"}
+                        </span>
+                      </button>
+                    </>
+                  ) : null}
+                </section>
+
+                <section className="mt-4 border-t border-white/10 pt-4">
+                  <h2 className="mb-3 text-xs font-bold uppercase text-zinc-500">
+                    Votre avis
+                  </h2>
+                  <div className="grid grid-cols-2 gap-2">
                     <button
-                      key={item.id}
                       type="button"
-                      onClick={() => {
-                        trackingDetectedRef.current = false;
-                        setProviderId(item.id);
-                      }}
-                      className={`h-9 rounded border px-3 text-xs font-bold transition ${
-                        providerId === item.id
-                          ? "border-[#e50914] bg-[#e50914] text-white"
-                          : "border-white/10 bg-white/[0.06] text-zinc-300 hover:text-white"
+                      onClick={like}
+                      aria-pressed={liked}
+                      className={`inline-flex h-11 items-center justify-center gap-2 rounded px-3 text-sm font-bold transition ${
+                        liked
+                          ? "bg-[#e50914] text-white hover:bg-[#f6121d]"
+                          : "bg-white text-black hover:bg-zinc-200"
                       }`}
                     >
-                      {item.name}
+                      <Heart className={`h-4 w-4 ${liked ? "fill-white" : ""}`} />
+                      {liked ? "Aime" : "J'aime"}
                     </button>
-                  ))}
-                </div>
-                <div className="grid grid-cols-[auto_1fr] items-center gap-3">
-                  <Languages className="h-4 w-4 text-zinc-400" />
-                  <select
-                    value={activeLanguage}
-                    onChange={(event) => setLanguage(event.target.value)}
-                    className="control-field w-full"
-                  >
-                    {languageOptions.map((option) => (
-                      <option key={option.id} value={option.id}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                {detail.mediaType === "tv" ? (
-                  <div className="grid grid-cols-2 gap-3">
-                    <select
-                      value={season}
-                      onChange={(event) => changeSeason(Number(event.target.value))}
-                      className="control-field w-full"
+                    <button
+                      type="button"
+                      onClick={dislike}
+                      aria-pressed={disliked}
+                      className={`inline-flex h-11 items-center justify-center gap-2 rounded px-3 text-sm font-bold transition ${
+                        disliked
+                          ? "bg-white text-black"
+                          : "bg-white/[0.06] text-zinc-200 ring-1 ring-white/10 hover:bg-white/10"
+                      }`}
                     >
-                      {availableSeasons.map((item) => (
-                        <option key={item.id} value={item.seasonNumber}>
-                          Saison {item.seasonNumber}
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      value={episode}
-                      onChange={(event) => changeEpisode(Number(event.target.value))}
-                      className="control-field w-full"
+                      <ThumbsDown
+                        className={`h-4 w-4 ${disliked ? "fill-black" : ""}`}
+                      />
+                      {disliked ? "Ignore" : "Pas pour moi"}
+                    </button>
+                  </div>
+                </section>
+
+                <section className="mt-4 border-t border-white/10 pt-4">
+                  <h2 className="mb-3 text-xs font-bold uppercase text-zinc-500">
+                    Progression
+                  </h2>
+                  {detail.mediaType === "tv" && seriesProgress ? (
+                    <div className="mb-3">
+                      <div className="mb-2 flex items-center justify-between gap-3 text-xs text-zinc-300">
+                        <span>Saison {seriesProgress.seasonNumber}</span>
+                        <span>
+                          {seriesProgress.completedEpisodes}/
+                          {seriesProgress.totalEpisodes} episodes vus
+                        </span>
+                      </div>
+                      <div className="h-1.5 overflow-hidden rounded-full bg-white/10">
+                        <span
+                          className="block h-full rounded-full bg-[#e50914]"
+                          style={{ width: `${seriesPercent}%` }}
+                        />
+                      </div>
+                    </div>
+                  ) : null}
+                  <div className="mb-2 min-w-0 text-xs text-zinc-500">
+                    {detail.mediaType === "tv"
+                      ? episodeInfo?.name ?? `Episode ${episode}`
+                      : "Film en cours"}
+                  </div>
+                  <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
+                    <div className="rounded bg-white/5 p-3 text-xs text-zinc-300">
+                      {formatTime(progress.currentTime)} /{" "}
+                      {formatTime(displayedDuration)}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={markAsWatched}
+                      aria-pressed={completed}
+                      className={`inline-flex h-10 items-center gap-2 rounded px-3 text-xs font-bold transition ${
+                        completed
+                          ? "bg-[#e50914] text-white"
+                          : "bg-white/[0.06] text-zinc-200 ring-1 ring-white/10 hover:bg-white/10"
+                      }`}
                     >
-                      {episodeOptions.map((episodeNumber) => (
-                        <option key={episodeNumber} value={episodeNumber}>
-                          Episode {episodeNumber}
-                        </option>
-                      ))}
-                    </select>
+                      <Check className="h-4 w-4" />
+                      {completed ? "Vu" : "Marquer vu"}
+                    </button>
                   </div>
-                ) : null}
-                {detail.mediaType === "tv" ? (
-                  <label className="flex h-10 items-center justify-between rounded bg-white/[0.06] px-3 text-sm text-zinc-200 ring-1 ring-white/10">
-                    <span className="inline-flex items-center gap-2">
-                      <ToggleRight className="h-4 w-4 text-zinc-400" />
-                      Episode suivant
-                    </span>
-                    <input
-                      type="checkbox"
-                      checked={autoNext}
-                      onChange={(event) => setAutoNext(event.target.checked)}
-                      className="h-4 w-4 accent-[#e50914]"
-                    />
-                  </label>
-                ) : null}
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={like}
-                    aria-pressed={liked}
-                    className={`inline-flex h-11 items-center justify-center gap-2 rounded px-3 text-sm font-bold transition ${
-                      liked
-                        ? "bg-[#e50914] text-white hover:bg-[#f6121d]"
-                        : "bg-white text-black hover:bg-zinc-200"
-                    }`}
-                  >
-                    <Heart className={`h-4 w-4 ${liked ? "fill-white" : ""}`} />
-                    {liked ? "Aime" : "J'aime"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={dislike}
-                    aria-pressed={disliked}
-                    className={`inline-flex h-11 items-center justify-center gap-2 rounded px-3 text-sm font-bold transition ${
-                      disliked
-                        ? "bg-white text-black"
-                        : "bg-white/[0.06] text-zinc-200 ring-1 ring-white/10 hover:bg-white/10"
-                    }`}
-                  >
-                    <ThumbsDown
-                      className={`h-4 w-4 ${disliked ? "fill-black" : ""}`}
-                    />
-                    {disliked ? "Ignore" : "Pas pour moi"}
-                  </button>
-                </div>
-                <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
-                  <div className="rounded bg-white/5 p-3 text-xs text-zinc-300">
-                    {formatTime(progress.currentTime)} /{" "}
-                    {formatTime(progress.duration)}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={markAsWatched}
-                    aria-pressed={completed}
-                    className={`inline-flex h-10 items-center gap-2 rounded px-3 text-xs font-bold transition ${
-                      completed
-                        ? "bg-[#e50914] text-white"
-                        : "bg-white/[0.06] text-zinc-200 ring-1 ring-white/10 hover:bg-white/10"
-                    }`}
-                  >
-                    <Check className="h-4 w-4" />
-                    {completed ? "Vu" : "Marquer vu"}
-                  </button>
-                </div>
+                </section>
               </aside>
             </div>
           </div>

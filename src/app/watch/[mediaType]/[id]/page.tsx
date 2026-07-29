@@ -6,8 +6,13 @@ import {
 } from "@/lib/provider-availability";
 import { getFstreamProviders } from "@/lib/fstream";
 import { getEmbedProviders } from "@/lib/providers";
-import { getProgress, hasDislike, hasLike } from "@/lib/store";
-import { getDetails } from "@/lib/tmdb";
+import {
+  getProgress,
+  getSeriesProgressSummary,
+  hasDislike,
+  hasLike,
+} from "@/lib/store";
+import { getDetails, getEpisodeInfo } from "@/lib/tmdb";
 import type { MediaType } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -52,6 +57,13 @@ export default async function WatchPage({ params, searchParams }: PageProps) {
     ...fstreamProviders,
   ].sort((left, right) => left.priority - right.priority);
   const progress = getProgress(id, mediaType, season, episode);
+  const [episodeInfo, seriesProgress] =
+    mediaType === "tv" && season !== null && episode !== null
+      ? await Promise.all([
+          getEpisodeInfo(id, season, episode),
+          Promise.resolve(getSeriesProgressSummary(id, season, maxEpisode)),
+        ])
+      : [null, null];
 
   return (
     <WatchExperience
@@ -62,6 +74,8 @@ export default async function WatchPage({ params, searchParams }: PageProps) {
       initialDisliked={hasDislike(id, mediaType)}
       initialSeason={season}
       initialEpisode={episode}
+      initialEpisodeInfo={episodeInfo}
+      initialSeriesProgress={seriesProgress}
     />
   );
 }
