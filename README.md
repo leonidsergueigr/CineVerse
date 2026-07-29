@@ -11,26 +11,101 @@ Home cinema local auto-heberge, inspire des interfaces de streaming premium, ave
 - TMDB pour les metadonnees, tendances, recherche, decouverte et recommandations.
 - Cheerio pour lire les catalogues publics de nouveautes Films et Series.
 
-## Lancer en local
+## Demarrage rapide
+
+### Prerequis
+
+Choisis un seul mode de lancement:
+
+- local: Node.js 22 et npm;
+- conteneur: Docker avec le plugin Docker Compose.
+
+Ne lance pas simultanement la version locale et la version Docker: elles
+utilisent toutes les deux le port `3000` et peuvent ouvrir le meme fichier
+SQLite.
+
+### Configuration
+
+Depuis la racine du projet:
 
 ```bash
 cp .env.example .env
-npm install
+```
+
+Renseigne ensuite au moins `TMDB_ACCESS_TOKEN` ou `TMDB_API_KEY` dans `.env`
+pour utiliser le catalogue reel. Sans cle TMDB, CineVerse demarre avec un petit
+catalogue de secours. Le fichier `.env` est local et ne doit pas etre commite.
+
+### Lancer en local
+
+```bash
+npm ci
 npm run dev
 ```
 
+`npm ci` suffit normalement. Utilise `npm install` uniquement lorsque tu
+modifies les dependances.
+
 Ouvre ensuite `http://localhost:3000`.
 
-Sans cle TMDB, CineVerse demarre avec un petit catalogue de secours. Pour les vraies donnees, renseigne `TMDB_ACCESS_TOKEN` ou `TMDB_API_KEY` dans `.env`.
-
-## Lancer avec Docker
+Pour tester le mode production sans Docker:
 
 ```bash
-cp .env.example .env
+npm run build
+npm run start
+```
+
+### Lancer avec Docker
+
+```bash
+mkdir -p data
 docker compose up --build
 ```
 
-La base SQLite est montee dans `./data/cineverse.sqlite`.
+Ouvre ensuite `http://localhost:3000`. La base SQLite est conservee dans
+`./data/cineverse.sqlite`; un redemarrage ou une reconstruction de l'image ne
+supprime donc pas les likes, l'historique ou le cache.
+
+Commandes utiles:
+
+```bash
+# Voir les journaux
+docker compose logs -f cineverse
+
+# Arreter proprement
+docker compose down
+
+# Reconstruire apres une modification
+docker compose up --build
+```
+
+### Erreur SQLite avec Docker
+
+Si les journaux affichent `SQLITE_CANTOPEN` ou `unable to open database file`,
+le conteneur ne peut pas ecrire dans `/app/data`. Le volume Compose utilise
+`./data:/app/data:Z`: le suffixe `:Z` applique automatiquement le label requis
+par SELinux sur Fedora, RHEL et les distributions apparentees.
+
+Apres avoir recupere cette correction, redemarre completement le service:
+
+```bash
+docker compose down
+mkdir -p data
+docker compose up --build
+```
+
+Pour verifier le montage et les journaux:
+
+```bash
+docker compose config
+docker compose logs -f cineverse
+```
+
+Sur une machine sans SELinux, `:Z` est sans effet particulier. Pour stocker la
+base ailleurs en mode local, configure `CINEVERSE_DATA_DIR` avec un chemin
+absolu accessible en lecture et en ecriture.
+
+## Donnees et cache
 
 Les reponses TMDB deja consultees sont conservees dans `external_api_cache`.
 Les tendances expirent rapidement, tandis que les fiches et credits restent en

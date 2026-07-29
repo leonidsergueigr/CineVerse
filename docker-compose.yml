@@ -7,5 +7,6 @@ services:
     env_file:
       - .env
     volumes:
-      - ./data:/app/data
+      # :Z gives this private bind mount the correct SELinux label on Fedora/RHEL.
+      - ./data:/app/data:Z
     restart: unless-stopped

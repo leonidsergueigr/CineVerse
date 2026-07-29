@@ -68,9 +68,22 @@ let lastCachePrune = 0;
 export function getDb() {
   if (db) return db;
 
-  const dataDir = path.join(process.cwd(), "data");
-  fs.mkdirSync(dataDir, { recursive: true });
-  db = new Database(path.join(dataDir, "cineverse.sqlite"));
+  const configuredDataDir = process.env.CINEVERSE_DATA_DIR?.trim();
+  const dataDir = configuredDataDir
+    ? path.resolve(configuredDataDir)
+    : path.join(process.cwd(), "data");
+  const databasePath = path.join(dataDir, "cineverse.sqlite");
+
+  try {
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.accessSync(dataDir, fs.constants.R_OK | fs.constants.W_OK);
+    db = new Database(databasePath);
+  } catch (error) {
+    throw new Error(
+      `CineVerse ne peut pas ouvrir SQLite dans ${databasePath}. Verifie les permissions du volume et le label SELinux (:Z avec Docker Compose).`,
+      { cause: error },
+    );
+  }
   db.pragma("journal_mode = WAL");
   db.exec(`
     create table if not exists watch_history (
