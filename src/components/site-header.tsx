@@ -67,7 +67,7 @@ export function SiteHeader({ query, fixed = true }: Props) {
         </Link>
 
         <div className="hidden w-full max-w-xl md:block">
-          <SearchBox query={query} />
+          <SearchBox key={query ?? "empty"} query={query} />
         </div>
 
         <div className="flex h-full min-w-0 items-center">
@@ -123,6 +123,7 @@ export function SiteHeader({ query, fixed = true }: Props) {
       {mobileSearchOpen ? (
         <div className="absolute inset-x-0 top-full border-b border-white/10 bg-[#090909] p-3 shadow-2xl md:hidden">
           <SearchBox
+            key={query ?? "empty"}
             query={query}
             autoFocus
             onNavigate={() => setMobileSearchOpen(false)}
@@ -181,6 +182,8 @@ function SearchBox({
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
+  const formRef = useRef<HTMLFormElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const requestRef = useRef<AbortController | null>(null);
   const suggestionGroups = useMemo(() => {
     const titles = items.filter((item) => item.kind !== "person");
@@ -194,6 +197,27 @@ function SearchBox({
     () => suggestionGroups.flatMap((group) => group.items),
     [suggestionGroups],
   );
+
+  function closeSuggestions(blurInput = false) {
+    requestRef.current?.abort();
+    requestRef.current = null;
+    setOpen(false);
+    setLoading(false);
+    setActiveIndex(-1);
+    if (blurInput) inputRef.current?.blur();
+  }
+
+  useEffect(() => {
+    function closeOnOutsidePointer(event: PointerEvent) {
+      if (!formRef.current?.contains(event.target as Node)) {
+        closeSuggestions();
+      }
+    }
+
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    return () =>
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+  }, []);
 
   useEffect(() => {
     const search = value.trim();
@@ -228,26 +252,34 @@ function SearchBox({
   }, [value]);
 
   function navigate(href: string) {
-    setOpen(false);
+    closeSuggestions(true);
     onNavigate?.();
     router.push(href);
   }
 
   return (
     <form
+      ref={formRef}
       action="/browse"
       role="search"
       className="relative w-full"
       onSubmit={(event) => {
-        if (!value.trim()) event.preventDefault();
-        if (activeIndex >= 0 && displayedItems[activeIndex]) {
-          event.preventDefault();
-          navigate(displayedItems[activeIndex].href);
+        event.preventDefault();
+        const search = value.trim();
+        if (!search) {
+          closeSuggestions(true);
+          return;
         }
+        if (activeIndex >= 0 && displayedItems[activeIndex]) {
+          navigate(displayedItems[activeIndex].href);
+          return;
+        }
+        navigate(`/browse?q=${encodeURIComponent(search)}`);
       }}
     >
       <Search className="pointer-events-none absolute left-4 top-1/2 z-10 h-4 w-4 -translate-y-1/2 text-zinc-500" />
       <input
+        ref={inputRef}
         name="q"
         value={value}
         autoFocus={autoFocus}
@@ -272,9 +304,7 @@ function SearchBox({
           setValue(nextValue);
           if (nextValue.trim().length < 2) {
             setItems([]);
-            setOpen(false);
-            setLoading(false);
-            setActiveIndex(-1);
+            closeSuggestions();
           }
         }}
         onKeyDown={(event) => {
@@ -291,8 +321,7 @@ function SearchBox({
                 index <= 0 ? displayedItems.length - 1 : index - 1,
             );
           } else if (event.key === "Escape") {
-            setOpen(false);
-            setActiveIndex(-1);
+            closeSuggestions(true);
           }
         }}
         className="h-11 w-full rounded-full border border-white/15 bg-[#191919] pl-11 pr-11 text-sm text-white outline-none transition placeholder:text-zinc-500 focus:border-white/35 focus:bg-[#202020]"
