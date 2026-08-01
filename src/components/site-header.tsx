@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { GENRES, LANGUAGES, SERIES_GENRES } from "@/lib/genres";
+import { trackClientEvent } from "@/lib/client-events";
 import type { SearchSuggestion } from "@/lib/types";
 import { ProfileSwitcher } from "@/components/profile-switcher";
 
@@ -293,6 +294,10 @@ function SearchBox({
           navigate(displayedItems[activeIndex].href);
           return;
         }
+        trackClientEvent({
+          eventType: "SEARCHED",
+          metadata: { query: search },
+        });
         navigate(`/browse?q=${encodeURIComponent(search)}`);
       }}
     >

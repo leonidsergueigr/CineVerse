@@ -8,6 +8,13 @@ import {
 } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { applyWatchTrackingSchema } from "@/lib/watch-schema";
+import {
+  completionSignalWeight,
+  evaluateCompletion,
+  type CompletionSource,
+  type TrackingConfidence,
+} from "@/lib/watch-tracking";
 import {
   LEGACY_PROFILE_ID,
   MAX_PROFILES,
@@ -19,11 +26,15 @@ import type {
   LikeRecord,
   MediaType,
   Profile,
+  RecommendationExposure,
+  RecommendationImpression,
   SeriesProgressSummary,
+  ViewingEventType,
   WatchProgress,
+  WatchlistRecord,
 } from "@/lib/types";
 
-type ProgressInput = {
+export type ProgressInput = {
   tmdbId: number;
   mediaType: MediaType;
   seasonNumber?: number | null;
@@ -34,6 +45,11 @@ type ProgressInput = {
   progressSeconds: number;
   durationSeconds: number;
   completed?: boolean;
+  completionSource?: CompletionSource;
+  trackingConfidence?: TrackingConfidence;
+  manualMarkedAt?: number | null;
+  estimatedWatchSeconds?: number;
+  providerWatchSeconds?: number;
   seriesEpisodeCounts?: Array<{
     seasonNumber: number;
     episodeCount: number;
@@ -47,6 +63,15 @@ type LikeInput = {
   posterPath?: string | null;
   backdropPath?: string | null;
   liked: boolean;
+};
+
+type WatchlistInput = {
+  tmdbId: number;
+  mediaType: MediaType;
+  title: string;
+  posterPath?: string | null;
+  backdropPath?: string | null;
+  included: boolean;
 };
 
 type DislikeInput = {
@@ -74,6 +99,31 @@ type DbDislike = {
 type ApiCacheRow = {
   payload: string;
   expires_at: number;
+};
+
+export type ViewingEventInput = {
+  eventType: ViewingEventType;
+  tmdbId?: number | null;
+  mediaType?: MediaType | null;
+  title?: string;
+  posterPath?: string | null;
+  seasonNumber?: number | null;
+  episodeNumber?: number | null;
+  positionSeconds?: number;
+  durationSeconds?: number;
+  audioLanguage?: string;
+  subtitleLanguage?: string | null;
+  provider?: string;
+  sessionId?: string;
+  genreIds?: number[];
+  timezoneOffsetMinutes?: number;
+  metadata?: Record<string, unknown>;
+  completionSource?: CompletionSource;
+  trackingConfidence?: TrackingConfidence;
+  estimatedWatchSeconds?: number;
+  providerWatchSeconds?: number;
+  watchSecondsOverride?: number;
+  idempotencyKey?: string;
 };
 
 type DbProfile = {
@@ -181,6 +231,18 @@ export function getDb() {
       unique(user_id, tmdb_id, media_type)
     );
 
+    create table if not exists user_watchlist (
+      id integer primary key autoincrement,
+      user_id text not null default 'local',
+      tmdb_id integer not null,
+      media_type text not null,
+      title text not null,
+      poster_path text,
+      backdrop_path text,
+      added_at text not null default current_timestamp,
+      unique(user_id, tmdb_id, media_type)
+    );
+
     create table if not exists external_api_cache (
       cache_key text primary key,
       payload text not null,
@@ -190,6 +252,66 @@ export function getDb() {
 
     create index if not exists external_api_cache_expiry
       on external_api_cache(expires_at);
+
+    create table if not exists viewing_events (
+      id integer primary key autoincrement,
+      profile_id text not null,
+      session_id text not null default '',
+      tmdb_id integer,
+      media_type text,
+      title text not null default '',
+      poster_path text,
+      event_type text not null,
+      occurred_at integer not null,
+      season_number integer,
+      episode_number integer,
+      position_seconds integer not null default 0,
+      duration_seconds integer not null default 0,
+      watch_seconds integer not null default 0,
+      audio_language text not null default '',
+      subtitle_language text,
+      provider text not null default '',
+      genre_ids text not null default '[]',
+      timezone_offset_minutes integer not null default 0,
+      metadata_json text not null default '{}'
+    );
+
+    create index if not exists viewing_events_profile_time
+      on viewing_events(profile_id, occurred_at desc);
+
+    create index if not exists viewing_events_profile_media
+      on viewing_events(profile_id, media_type, tmdb_id);
+
+    create index if not exists viewing_events_session
+      on viewing_events(profile_id, session_id, occurred_at);
+
+    create table if not exists recommendation_impressions (
+      id integer primary key autoincrement,
+      profile_id text not null,
+      session_id text not null,
+      tmdb_id integer not null,
+      media_type text not null,
+      shelf_type text not null,
+      position integer not null default 0,
+      score real,
+      shown_at integer not null,
+      clicked integer not null default 0,
+      played integer not null default 0,
+      completed integer not null default 0,
+      dismissed integer not null default 0,
+      unique(profile_id, session_id, tmdb_id, media_type, shelf_type)
+    );
+
+    create index if not exists recommendation_impressions_profile_time
+      on recommendation_impressions(profile_id, shown_at desc);
+
+    create index if not exists recommendation_impressions_profile_media
+      on recommendation_impressions(profile_id, media_type, tmdb_id, shown_at desc);
+
+    create table if not exists app_migrations (
+      id text primary key,
+      applied_at integer not null
+    );
   `);
   ensureColumn(
     db,
@@ -199,6 +321,7 @@ export function getDb() {
   );
   ensureColumn(db, "profiles", "pin_hash", "text");
   ensureColumn(db, "profiles", "pin_salt", "text");
+  applyWatchTrackingSchema(db);
   if (hadLegacyPersonalData) {
     db.prepare(
       `
@@ -207,6 +330,9 @@ export function getDb() {
     `,
     ).run(LEGACY_PROFILE_ID, PROFILE_COLORS[0]);
   }
+  runMigration(db, "completion-watch-seconds-v2", () => {
+    repairCompletionWatchSeconds(db!);
+  });
 
   return db;
 }
@@ -341,8 +467,18 @@ export function deleteProfile(profileId: string) {
       .prepare("delete from profile_sessions where profile_id = ?")
       .run(profileId);
     database.prepare("delete from watch_history where user_id = ?").run(profileId);
+    database
+      .prepare("delete from watch_sessions where profile_id = ?")
+      .run(profileId);
     database.prepare("delete from user_likes where user_id = ?").run(profileId);
     database.prepare("delete from user_dislikes where user_id = ?").run(profileId);
+    database.prepare("delete from user_watchlist where user_id = ?").run(profileId);
+    database
+      .prepare("delete from viewing_events where profile_id = ?")
+      .run(profileId);
+    database
+      .prepare("delete from recommendation_impressions where profile_id = ?")
+      .run(profileId);
     database.prepare("delete from profiles where id = ?").run(profileId);
   })();
   return true;
@@ -474,13 +610,41 @@ export function setCachedApiResponse(
 }
 
 export function saveProgress(profileId: string, input: ProgressInput) {
-  const completed = isPlaybackComplete(input) ? 1 : 0;
+  const previous = getProgress(
+    profileId,
+    input.tmdbId,
+    input.mediaType,
+    input.seasonNumber ?? null,
+    input.episodeNumber ?? null,
+  );
+  const completed =
+    input.completed === undefined
+      ? isPlaybackComplete(input)
+        ? 1
+        : 0
+      : input.completed
+        ? 1
+        : 0;
+  const completionSource = completed
+    ? input.completionSource ?? "unknown"
+    : "unknown";
+  const trackingConfidence = input.trackingConfidence ?? "low";
   const seriesEpisodeCounts = JSON.stringify(
     sanitizeEpisodeCounts(input.seriesEpisodeCounts),
   );
 
   const database = getDb();
-  const payload = { ...input, profileId, completed, seriesEpisodeCounts };
+  const payload = {
+    ...input,
+    profileId,
+    completed,
+    completionSource,
+    trackingConfidence,
+    manualMarkedAt: input.manualMarkedAt ?? null,
+    estimatedWatchSeconds: nonNegativeInteger(input.estimatedWatchSeconds),
+    providerWatchSeconds: nonNegativeInteger(input.providerWatchSeconds),
+    seriesEpisodeCounts,
+  };
 
   const updated = database
     .prepare(
@@ -498,6 +662,21 @@ export function saveProgress(profileId: string, input: ProgressInput) {
           else @durationSeconds
         end,
         completed = max(completed, @completed),
+        completion_source = case
+          when @completed = 1 then @completionSource
+          else completion_source
+        end,
+        tracking_confidence = case
+          when @completed = 1 then @trackingConfidence
+          else tracking_confidence
+        end,
+        manual_marked_at = coalesce(@manualMarkedAt, manual_marked_at),
+        estimated_watch_seconds = max(
+          estimated_watch_seconds, @estimatedWatchSeconds
+        ),
+        provider_watch_seconds = max(
+          provider_watch_seconds, @providerWatchSeconds
+        ),
         series_episode_counts = case
           when @seriesEpisodeCounts = '[]' then series_episode_counts
           else @seriesEpisodeCounts
@@ -512,22 +691,71 @@ export function saveProgress(profileId: string, input: ProgressInput) {
     )
     .run(payload);
 
-  if (updated.changes > 0) return;
+  if (updated.changes === 0) {
+    database
+      .prepare(
+        `
+        insert into watch_history (
+          user_id, tmdb_id, media_type, season_number, episode_number, title,
+          poster_path, backdrop_path, progress_seconds, duration_seconds, completed,
+          completion_source, tracking_confidence, manual_marked_at,
+          estimated_watch_seconds, provider_watch_seconds,
+          series_episode_counts, updated_at
+        )
+        values (@profileId, @tmdbId, @mediaType, @seasonNumber, @episodeNumber, @title,
+          @posterPath, @backdropPath, @progressSeconds, @durationSeconds, @completed,
+          @completionSource, @trackingConfidence, @manualMarkedAt,
+          @estimatedWatchSeconds, @providerWatchSeconds,
+          @seriesEpisodeCounts, datetime('now'))
+      `,
+      )
+      .run(payload);
+  }
 
-  database
+  return {
+    completed: Boolean(completed || previous?.completed),
+    newlyCompleted: Boolean(completed && !previous?.completed),
+  };
+}
+
+export function unmarkProgress(
+  profileId: string,
+  input: Pick<
+    ProgressInput,
+    "tmdbId" | "mediaType" | "seasonNumber" | "episodeNumber"
+  >,
+) {
+  const result = getDb()
     .prepare(
       `
-      insert into watch_history (
-        user_id, tmdb_id, media_type, season_number, episode_number, title,
-        poster_path, backdrop_path, progress_seconds, duration_seconds, completed,
-        series_episode_counts, updated_at
-      )
-      values (@profileId, @tmdbId, @mediaType, @seasonNumber, @episodeNumber, @title,
-        @posterPath, @backdropPath, @progressSeconds, @durationSeconds, @completed,
-        @seriesEpisodeCounts, datetime('now'))
+      update watch_history set
+        completed = 0,
+        completion_source = 'unknown',
+        tracking_confidence = case
+          when provider_watch_seconds > 0 then 'high'
+          when estimated_watch_seconds > 0 then 'medium'
+          else 'low'
+        end,
+        manual_marked_at = null,
+        progress_seconds = case
+          when provider_watch_seconds > 0 then min(provider_watch_seconds, duration_seconds)
+          when estimated_watch_seconds > 0 then min(estimated_watch_seconds, duration_seconds)
+          else 0
+        end,
+        updated_at = datetime('now')
+      where user_id = ? and tmdb_id = ? and media_type = ?
+        and coalesce(season_number, -1) = coalesce(?, -1)
+        and coalesce(episode_number, -1) = coalesce(?, -1)
     `,
     )
-    .run(payload);
+    .run(
+      profileId,
+      input.tmdbId,
+      input.mediaType,
+      input.seasonNumber ?? null,
+      input.episodeNumber ?? null,
+    );
+  return result.changes > 0;
 }
 
 export function getProgress(
@@ -624,6 +852,377 @@ export function getContinueWatching(
     .slice(0, limit);
 }
 
+export function getRecommendationLikes(
+  profileId: string,
+  limit = 32,
+): LikeRecord[] {
+  const explicitLikes = getLikes(profileId, limit);
+  const seen = new Set(
+    explicitLikes.map((item) => `${item.mediaType}:${item.tmdbId}`),
+  );
+  const completed = getDb()
+    .prepare(
+      `
+      select tmdb_id as tmdbId, media_type as mediaType, title,
+        poster_path as posterPath, backdrop_path as backdropPath,
+        updated_at as likedAt, completion_source as completionSource
+      from watch_history
+      where user_id = ? and completed = 1
+      order by datetime(updated_at) desc, id desc
+    `,
+    )
+    .all(profileId) as LikeRecord[];
+
+  for (const item of completed) {
+    const key = `${item.mediaType}:${item.tmdbId}`;
+    if (seen.has(key)) continue;
+    explicitLikes.push({
+      ...item,
+      signalOrigin: "completed",
+      signalStrength: completionSignalWeight(
+        item.completionSource ?? "unknown",
+      ),
+    });
+    seen.add(key);
+    if (explicitLikes.length >= limit) break;
+  }
+  return explicitLikes.slice(0, limit);
+}
+
+export function recordRecommendationImpressions(
+  profileId: string,
+  sessionId: string,
+  impressions: RecommendationImpression[],
+) {
+  const normalizedSessionId = normalizeEventText(sessionId, 96);
+  if (!normalizedSessionId || !getProfile(profileId)) return 0;
+  const now = Date.now();
+  const statement = getDb().prepare(
+    `
+      insert or ignore into recommendation_impressions (
+        profile_id, session_id, tmdb_id, media_type, shelf_type,
+        position, score, shown_at
+      )
+      values (
+        @profileId, @sessionId, @tmdbId, @mediaType, @shelfType,
+        @position, @score, @shownAt
+      )
+    `,
+  );
+  const items = impressions
+    .slice(0, 160)
+    .filter(
+      (item) =>
+        Number.isFinite(item.tmdbId) &&
+        (item.mediaType === "movie" || item.mediaType === "tv"),
+    );
+  const transaction = getDb().transaction(() =>
+    items.reduce(
+      (count, item) =>
+        count +
+        statement.run({
+          profileId,
+          sessionId: normalizedSessionId,
+          tmdbId: Math.floor(item.tmdbId),
+          mediaType: item.mediaType,
+          shelfType: normalizeEventText(item.shelfType, 80) || "home",
+          position: clampInteger(item.position, 0, 1000),
+          score: Number.isFinite(item.score) ? item.score : null,
+          shownAt: now,
+        }).changes,
+      0,
+    ),
+  );
+  return transaction();
+}
+
+export function markRecommendationImpression(
+  profileId: string,
+  input: {
+    sessionId?: string;
+    tmdbId: number;
+    mediaType: MediaType;
+    action: "clicked" | "played" | "completed" | "dismissed";
+    shelfType?: string;
+  },
+) {
+  const column = input.action;
+  const sessionId = normalizeEventText(input.sessionId, 96);
+  const row = getDb()
+    .prepare(
+      `
+        select id
+        from recommendation_impressions
+        where profile_id = ? and tmdb_id = ? and media_type = ?
+          and (? = '' or session_id = ?)
+        order by shown_at desc, id desc
+        limit 1
+      `,
+    )
+    .get(
+      profileId,
+      Math.floor(input.tmdbId),
+      input.mediaType,
+      sessionId,
+      sessionId,
+    ) as { id: number } | undefined;
+  if (!row) {
+    if (!sessionId) return false;
+    const shelfType =
+      normalizeEventText(input.shelfType, 80) || "interaction";
+    getDb()
+      .prepare(
+        `
+          insert into recommendation_impressions (
+            profile_id, session_id, tmdb_id, media_type, shelf_type,
+            position, shown_at, ${column}
+          )
+          values (?, ?, ?, ?, ?, 0, ?, 1)
+          on conflict(profile_id, session_id, tmdb_id, media_type, shelf_type)
+          do update set ${column} = 1
+        `,
+      )
+      .run(
+        profileId,
+        sessionId,
+        Math.floor(input.tmdbId),
+        input.mediaType,
+        shelfType,
+        Date.now(),
+      );
+    return true;
+  }
+  getDb()
+    .prepare(
+      `update recommendation_impressions set ${column} = 1 where id = ?`,
+    )
+    .run(row.id);
+  return true;
+}
+
+export function getRecommendationExposures(
+  profileId: string,
+  days = 30,
+): RecommendationExposure[] {
+  const since = Date.now() - Math.max(1, days) * 24 * 60 * 60 * 1000;
+  return getDb()
+    .prepare(
+      `
+        select tmdb_id as tmdbId, media_type as mediaType,
+          count(*) as shownCount, sum(clicked) as clickedCount,
+          sum(played) as playedCount, sum(completed) as completedCount,
+          sum(dismissed) as dismissedCount,
+          sum(
+            case
+              when clicked = 0 and played = 0 and completed = 0 and dismissed = 0
+              then 1 else 0
+            end
+          ) as ignoredCount,
+          max(shown_at) as lastShownAt
+        from recommendation_impressions
+        where profile_id = ? and shown_at >= ?
+        group by tmdb_id, media_type
+      `,
+    )
+    .all(profileId, since) as RecommendationExposure[];
+}
+
+export function recordViewingEvent(
+  profileId: string,
+  input: ViewingEventInput,
+) {
+  if (!getProfile(profileId)) return false;
+
+  const now = Date.now();
+  const tmdbId = finiteIntegerOrNull(input.tmdbId);
+  const mediaType =
+    input.mediaType === "movie" || input.mediaType === "tv"
+      ? input.mediaType
+      : null;
+  const sessionId = normalizeEventText(input.sessionId, 96);
+  const seasonNumber = finiteIntegerOrNull(input.seasonNumber);
+  const episodeNumber = finiteIntegerOrNull(input.episodeNumber);
+  const positionSeconds = nonNegativeInteger(input.positionSeconds);
+  const durationSeconds = nonNegativeInteger(input.durationSeconds);
+  const database = getDb();
+  const idempotencyKey = normalizeEventText(input.idempotencyKey, 128);
+
+  if (
+    idempotencyKey &&
+    database
+      .prepare(
+        "select 1 from viewing_events where profile_id = ? and idempotency_key = ? limit 1",
+      )
+      .get(profileId, idempotencyKey)
+  ) {
+    return false;
+  }
+
+  const duplicateWindow =
+    input.eventType === "VIEW_DETAILS"
+      ? 30 * 60 * 1000
+      : input.eventType === "COMPLETED"
+        ? 10 * 60 * 1000
+        : 0;
+  if (duplicateWindow > 0) {
+    const duplicate = database
+      .prepare(
+        `
+        select 1
+        from viewing_events
+        where profile_id = ?
+          and event_type = ?
+          and coalesce(tmdb_id, -1) = coalesce(?, -1)
+          and coalesce(media_type, '') = coalesce(?, '')
+          and coalesce(season_number, -1) = coalesce(?, -1)
+          and coalesce(episode_number, -1) = coalesce(?, -1)
+          and occurred_at >= ?
+        limit 1
+      `,
+      )
+      .get(
+        profileId,
+        input.eventType,
+        tmdbId,
+        mediaType,
+        seasonNumber,
+        episodeNumber,
+        now - duplicateWindow,
+      );
+    if (duplicate) return false;
+  }
+
+  if (input.eventType === "PLAY_STARTED" && sessionId) {
+    const duplicate = database
+      .prepare(
+        `
+        select 1
+        from viewing_events
+        where profile_id = ? and session_id = ? and event_type = 'PLAY_STARTED'
+          and coalesce(tmdb_id, -1) = coalesce(?, -1)
+          and coalesce(season_number, -1) = coalesce(?, -1)
+          and coalesce(episode_number, -1) = coalesce(?, -1)
+        limit 1
+      `,
+      )
+      .get(profileId, sessionId, tmdbId, seasonNumber, episodeNumber);
+    if (duplicate) return false;
+  }
+
+  const previous =
+    sessionId && tmdbId !== null
+      ? (database
+          .prepare(
+            `
+            select occurred_at as occurredAt, position_seconds as positionSeconds
+            from viewing_events
+            where profile_id = ? and session_id = ?
+              and tmdb_id = ?
+              and coalesce(season_number, -1) = coalesce(?, -1)
+              and coalesce(episode_number, -1) = coalesce(?, -1)
+              and event_type in ('PLAY_STARTED', 'PROGRESS_UPDATED', 'PAUSED')
+            order by occurred_at desc, id desc
+            limit 1
+          `,
+          )
+          .get(
+            profileId,
+            sessionId,
+            tmdbId,
+            seasonNumber,
+            episodeNumber,
+          ) as
+          | { occurredAt: number; positionSeconds: number }
+          | undefined)
+      : undefined;
+  const watchSeconds =
+    input.watchSecondsOverride === undefined
+      ? measuredWatchSeconds(input.eventType, now, positionSeconds, previous)
+      : nonNegativeInteger(input.watchSecondsOverride);
+  const estimatedWatchSeconds = Math.min(
+    watchSeconds,
+    nonNegativeInteger(input.estimatedWatchSeconds),
+  );
+  const providerWatchSeconds = Math.min(
+    watchSeconds,
+    nonNegativeInteger(input.providerWatchSeconds),
+  );
+
+  database
+    .prepare(
+      `
+      insert into viewing_events (
+        profile_id, session_id, tmdb_id, media_type, title, poster_path,
+        event_type, occurred_at, season_number, episode_number,
+        position_seconds, duration_seconds, watch_seconds, audio_language,
+        subtitle_language, provider, genre_ids, timezone_offset_minutes,
+        metadata_json, completion_source, tracking_confidence,
+        estimated_watch_seconds, provider_watch_seconds, idempotency_key
+      )
+      values (
+        @profileId, @sessionId, @tmdbId, @mediaType, @title, @posterPath,
+        @eventType, @occurredAt, @seasonNumber, @episodeNumber,
+        @positionSeconds, @durationSeconds, @watchSeconds, @audioLanguage,
+        @subtitleLanguage, @provider, @genreIds, @timezoneOffsetMinutes,
+        @metadataJson, @completionSource, @trackingConfidence,
+        @estimatedWatchSeconds, @providerWatchSeconds, @idempotencyKey
+      )
+    `,
+    )
+    .run({
+      profileId,
+      sessionId,
+      tmdbId,
+      mediaType,
+      title: normalizeEventText(input.title, 180),
+      posterPath: input.posterPath ?? null,
+      eventType: input.eventType,
+      occurredAt: now,
+      seasonNumber,
+      episodeNumber,
+      positionSeconds,
+      durationSeconds,
+      watchSeconds,
+      audioLanguage: normalizeEventText(input.audioLanguage, 24),
+      subtitleLanguage: input.subtitleLanguage
+        ? normalizeEventText(input.subtitleLanguage, 24)
+        : null,
+      provider: normalizeEventText(input.provider, 80),
+      genreIds: JSON.stringify(
+        Array.isArray(input.genreIds)
+          ? input.genreIds.map(Number).filter(Number.isFinite).slice(0, 12)
+          : [],
+      ),
+      timezoneOffsetMinutes: clampInteger(
+        input.timezoneOffsetMinutes,
+        -14 * 60,
+        14 * 60,
+      ),
+      metadataJson: JSON.stringify(input.metadata ?? {}),
+      completionSource: input.completionSource ?? "unknown",
+      trackingConfidence: input.trackingConfidence ?? "low",
+      estimatedWatchSeconds,
+      providerWatchSeconds,
+      idempotencyKey,
+    });
+  if (tmdbId !== null && mediaType) {
+    if (input.eventType === "PLAY_STARTED") {
+      markRecommendationImpression(profileId, {
+        tmdbId,
+        mediaType,
+        action: "played",
+      });
+    } else if (input.eventType === "COMPLETED") {
+      markRecommendationImpression(profileId, {
+        tmdbId,
+        mediaType,
+        action: "completed",
+      });
+    }
+  }
+  return true;
+}
+
 export function setLike(profileId: string, input: LikeInput) {
   if (!input.liked) {
     getDb()
@@ -678,6 +1277,65 @@ export function hasLike(
   const row = getDb()
     .prepare(
       "select 1 from user_likes where user_id = ? and tmdb_id = ? and media_type = ? limit 1",
+    )
+    .get(profileId, tmdbId, mediaType);
+  return Boolean(row);
+}
+
+export function setWatchlist(profileId: string, input: WatchlistInput) {
+  if (!input.included) {
+    getDb()
+      .prepare(
+        "delete from user_watchlist where user_id = ? and tmdb_id = ? and media_type = ?",
+      )
+      .run(profileId, input.tmdbId, input.mediaType);
+    return;
+  }
+
+  getDb()
+    .prepare(
+      `
+      insert into user_watchlist (
+        user_id, tmdb_id, media_type, title, poster_path, backdrop_path, added_at
+      )
+      values (
+        @profileId, @tmdbId, @mediaType, @title, @posterPath, @backdropPath, datetime('now')
+      )
+      on conflict(user_id, tmdb_id, media_type)
+      do update set added_at = datetime('now'), title = excluded.title,
+        poster_path = excluded.poster_path, backdrop_path = excluded.backdrop_path
+    `,
+    )
+    .run({ ...input, profileId });
+}
+
+export function getWatchlist(
+  profileId: string,
+  limit = 48,
+): WatchlistRecord[] {
+  return getDb()
+    .prepare(
+      `
+      select tmdb_id as tmdbId, media_type as mediaType, title,
+        poster_path as posterPath, backdrop_path as backdropPath,
+        added_at as addedAt
+      from user_watchlist
+      where user_id = ?
+      order by added_at desc
+      limit ?
+    `,
+    )
+    .all(profileId, limit) as WatchlistRecord[];
+}
+
+export function hasWatchlist(
+  profileId: string,
+  tmdbId: number,
+  mediaType: MediaType,
+) {
+  const row = getDb()
+    .prepare(
+      "select 1 from user_watchlist where user_id = ? and tmdb_id = ? and media_type = ? limit 1",
     )
     .get(profileId, tmdbId, mediaType);
   return Boolean(row);
@@ -772,6 +1430,11 @@ type DbProgress = {
   progress_seconds: number;
   duration_seconds: number;
   completed: 0 | 1;
+  completion_source: CompletionSource;
+  tracking_confidence: TrackingConfidence;
+  manual_marked_at: number | null;
+  estimated_watch_seconds: number;
+  provider_watch_seconds: number;
   series_episode_counts: string;
   updated_at: string;
 };
@@ -788,6 +1451,13 @@ function mapProgress(row: DbProgress): WatchProgress {
     progressSeconds: row.progress_seconds,
     durationSeconds: row.duration_seconds,
     completed: Boolean(row.completed),
+    completionSource: row.completion_source ?? "unknown",
+    trackingConfidence: row.tracking_confidence ?? "low",
+    manuallyMarkedAt: row.manual_marked_at
+      ? new Date(row.manual_marked_at).toISOString()
+      : null,
+    estimatedWatchSeconds: row.estimated_watch_seconds ?? 0,
+    providerWatchSeconds: row.provider_watch_seconds ?? 0,
     seriesEpisodeCounts: parseEpisodeCounts(row.series_episode_counts),
     updatedAt: row.updated_at,
   };
@@ -844,15 +1514,10 @@ function resolveContinueWatching(rows: DbProgress[]) {
 
 function isPlaybackComplete(input: ProgressInput) {
   if (input.completed) return true;
-  if (input.durationSeconds <= 0) return false;
-
-  const ratio = input.progressSeconds / input.durationSeconds;
-  const remainingSeconds = Math.max(
-    0,
-    input.durationSeconds - input.progressSeconds,
-  );
-  const creditsWindow = input.mediaType === "movie" ? 7 * 60 : 3 * 60;
-  return ratio >= 0.9 || (ratio >= 0.75 && remainingSeconds <= creditsWindow);
+  return evaluateCompletion({
+    providerProgressSeconds: input.progressSeconds,
+    officialRuntimeSeconds: input.durationSeconds,
+  }).completed;
 }
 
 function sanitizeEpisodeCounts(
@@ -903,6 +1568,141 @@ function parseNumberArray(value: string) {
   } catch {
     return [];
   }
+}
+
+function measuredWatchSeconds(
+  eventType: ViewingEventType,
+  now: number,
+  positionSeconds: number,
+  previous:
+    | { occurredAt: number; positionSeconds: number }
+    | undefined,
+) {
+  if (
+    !previous ||
+    !["PROGRESS_UPDATED", "PAUSED", "COMPLETED"].includes(eventType)
+  ) {
+    return 0;
+  }
+  const positionDelta = positionSeconds - previous.positionSeconds;
+  if (positionDelta <= 0) return 0;
+  const wallSeconds = Math.max(
+    0,
+    Math.floor((now - previous.occurredAt) / 1000),
+  );
+  const measuredSeconds = Math.min(positionDelta, wallSeconds + 5);
+
+  // A completion is already bounded by both the player position and elapsed
+  // wall time. Keeping the regular 120 s heartbeat cap here discarded almost
+  // entire movies when a provider only emitted PLAY_STARTED and COMPLETED.
+  if (eventType === "COMPLETED") {
+    return Math.max(0, Math.floor(measuredSeconds));
+  }
+
+  return Math.max(0, Math.floor(Math.min(measuredSeconds, 120)));
+}
+
+function runMigration(
+  database: Database.Database,
+  id: string,
+  migrate: () => void,
+) {
+  const applied = database
+    .prepare("select 1 from app_migrations where id = ? limit 1")
+    .get(id);
+  if (applied) return;
+
+  database.transaction(() => {
+    migrate();
+    database
+      .prepare("insert into app_migrations (id, applied_at) values (?, ?)")
+      .run(id, Date.now());
+  })();
+}
+
+function repairCompletionWatchSeconds(database: Database.Database) {
+  const completions = database
+    .prepare(
+      `
+      select id, profile_id as profileId, session_id as sessionId,
+        tmdb_id as tmdbId, season_number as seasonNumber,
+        episode_number as episodeNumber, occurred_at as occurredAt,
+        position_seconds as positionSeconds, watch_seconds as watchSeconds
+      from viewing_events
+      where event_type = 'COMPLETED' and session_id <> ''
+      order by occurred_at, id
+    `,
+    )
+    .all() as Array<{
+    id: number;
+    profileId: string;
+    sessionId: string;
+    tmdbId: number | null;
+    seasonNumber: number | null;
+    episodeNumber: number | null;
+    occurredAt: number;
+    positionSeconds: number;
+    watchSeconds: number;
+  }>;
+  const previousStatement = database.prepare(
+    `
+    select occurred_at as occurredAt, position_seconds as positionSeconds
+    from viewing_events
+    where profile_id = ? and session_id = ?
+      and coalesce(tmdb_id, -1) = coalesce(?, -1)
+      and coalesce(season_number, -1) = coalesce(?, -1)
+      and coalesce(episode_number, -1) = coalesce(?, -1)
+      and event_type in ('PLAY_STARTED', 'PROGRESS_UPDATED', 'PAUSED')
+      and (occurred_at < ? or (occurred_at = ? and id < ?))
+    order by occurred_at desc, id desc
+    limit 1
+  `,
+  );
+  const updateStatement = database.prepare(
+    "update viewing_events set watch_seconds = ? where id = ?",
+  );
+
+  for (const completion of completions) {
+    const previous = previousStatement.get(
+      completion.profileId,
+      completion.sessionId,
+      completion.tmdbId,
+      completion.seasonNumber,
+      completion.episodeNumber,
+      completion.occurredAt,
+      completion.occurredAt,
+      completion.id,
+    ) as
+      | { occurredAt: number; positionSeconds: number }
+      | undefined;
+    const repaired = measuredWatchSeconds(
+      "COMPLETED",
+      completion.occurredAt,
+      completion.positionSeconds,
+      previous,
+    );
+    if (repaired > completion.watchSeconds) {
+      updateStatement.run(repaired, completion.id);
+    }
+  }
+}
+
+function finiteIntegerOrNull(value: unknown) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.floor(number) : null;
+}
+
+function nonNegativeInteger(value: unknown) {
+  return Math.max(0, Math.floor(Number(value) || 0));
+}
+
+function clampInteger(value: unknown, minimum: number, maximum: number) {
+  return Math.min(maximum, Math.max(minimum, Math.floor(Number(value) || 0)));
+}
+
+function normalizeEventText(value: unknown, maximumLength: number) {
+  return String(value ?? "").trim().slice(0, maximumLength);
 }
 
 function normalizeProfileName(value: string) {

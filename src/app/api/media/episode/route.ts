@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getActiveProfileId } from "@/lib/active-profile";
 import { getSeriesProgressSummary } from "@/lib/store";
-import { getEpisodeInfo } from "@/lib/tmdb";
+import { getSeasonEpisodes } from "@/lib/tmdb";
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -28,8 +28,8 @@ export async function GET(request: Request) {
       { status: 401 },
     );
   }
-  const [episodeInfo, seriesProgress] = await Promise.all([
-    getEpisodeInfo(tmdbId, season, episode),
+  const [episodes, seriesProgress] = await Promise.all([
+    getSeasonEpisodes(tmdbId, season),
     Promise.resolve(
       getSeriesProgressSummary(
         profileId,
@@ -39,6 +39,8 @@ export async function GET(request: Request) {
       ),
     ),
   ]);
+  const episodeInfo =
+    episodes.find((item) => item.episodeNumber === episode) ?? null;
 
-  return NextResponse.json({ episodeInfo, seriesProgress });
+  return NextResponse.json({ episodeInfo, episodes, seriesProgress });
 }

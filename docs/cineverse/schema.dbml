@@ -1,0 +1,252 @@
+// CineVerse - modele physique cible pour SQLite.
+// Les metadonnees TMDB restent un cache; les donnees de profil sont durables.
+
+Table profiles {
+  id text [pk]
+  name text [not null]
+  color text [not null]
+  pin_hash text
+  pin_salt text
+  created_at text [not null]
+  updated_at text [not null]
+
+  Note: 'Profil local. Le PIN est optionnel et toujours derive.'
+}
+
+Table profile_sessions {
+  token_hash text [pk]
+  profile_id text [not null, ref: > profiles.id]
+  expires_at text [not null]
+  created_at text [not null]
+
+  indexes {
+    profile_id
+    expires_at
+  }
+}
+
+Table media_items {
+  id integer [pk, increment]
+  tmdb_id integer [not null]
+  media_type text [not null, note: 'movie | tv']
+  title text [not null]
+  original_title text
+  poster_path text
+  backdrop_path text
+  overview text
+  release_date text
+  original_language text
+  vote_average real
+  vote_count integer
+  metadata_json text
+  metadata_expires_at text
+  updated_at text [not null]
+
+  indexes {
+    (tmdb_id, media_type) [unique]
+    metadata_expires_at
+  }
+
+  Note: 'Cache minimal de metadonnees. tmdb_id + media_type est la reference canonique.'
+}
+
+Table seasons {
+  id integer [pk, increment]
+  media_id integer [not null, ref: > media_items.id]
+  season_number integer [not null, note: 'Strictement positif dans le parcours standard']
+  name text
+  episode_count integer
+  metadata_expires_at text
+
+  indexes {
+    (media_id, season_number) [unique]
+  }
+}
+
+Table playable_items {
+  id integer [pk, increment]
+  media_id integer [not null, ref: > media_items.id]
+  season_id integer [ref: > seasons.id]
+  season_number integer [not null, default: 0]
+  episode_number integer [not null, default: 0]
+  kind text [not null, note: 'movie | episode']
+  title text
+  runtime_seconds integer
+  metadata_expires_at text
+
+  indexes {
+    (media_id, season_number, episode_number) [unique]
+  }
+
+  Note: 'Film = 0/0. Episode = saison > 0 et episode > 0. Evite toute unicite nullable.'
+}
+
+Table providers {
+  id integer [pk, increment]
+  provider_key text [not null, unique]
+  name text [not null]
+  base_host text
+  enabled integer [not null, default: 1]
+  reliability integer
+  capabilities_json text
+  created_at text [not null]
+  updated_at text [not null]
+}
+
+Table stream_sources {
+  id integer [pk, increment]
+  playable_id integer [not null, ref: > playable_items.id]
+  provider_id integer [not null, ref: > providers.id]
+  language text [not null, note: 'vf | vff | vfq | vostfr | vo']
+  quality text
+  embed_url text [not null]
+  status text [not null, note: 'unknown | available | degraded | unavailable']
+  resolved_at text [not null]
+  expires_at text
+  last_checked_at text
+
+  indexes {
+    (playable_id, provider_id, language, embed_url) [unique]
+    (playable_id, language, status)
+    expires_at
+  }
+
+  Note: 'URL HTTPS validee et ephemere. Peut etre purgee sans perdre la progression.'
+}
+
+Table provider_health {
+  id integer [pk, increment]
+  provider_id integer [not null, ref: > providers.id]
+  status text [not null]
+  latency_ms integer
+  error_code text
+  checked_at text [not null]
+
+  indexes {
+    (provider_id, checked_at)
+  }
+}
+
+Table playback_sessions {
+  id text [pk]
+  profile_id text [not null, ref: > profiles.id]
+  playable_id integer [not null, ref: > playable_items.id]
+  source_id integer [ref: > stream_sources.id]
+  state text [not null, note: 'NON_COMMENCE | EN_CHARGEMENT | EN_LECTURE | PAUSE_ESTIMEE | INTERROMPU | ERREUR | TERMINE | INDETERMINE']
+  measurement_source text [not null, note: 'PLAYER_EXACT | PLAYER_SIGNAL | USER_DECLARED | SESSION_ONLY | UNKNOWN']
+  confidence real [not null, default: 0]
+  started_at text [not null]
+  last_signal_at text
+  ended_at text
+
+  indexes {
+    (profile_id, started_at)
+    (profile_id, playable_id, started_at)
+  }
+}
+
+Table viewing_events {
+  id integer [pk, increment]
+  profile_id text [not null, ref: > profiles.id]
+  playback_session_id text [ref: > playback_sessions.id]
+  playable_id integer [not null, ref: > playable_items.id]
+  event_type text [not null]
+  occurred_at text [not null]
+  position_seconds integer
+  duration_seconds integer
+  watch_seconds integer [not null, default: 0]
+  measurement_source text [not null]
+  confidence real [not null, default: 0]
+  audio_language text
+  subtitle_language text
+  provider_key text
+  timezone_offset integer
+  metadata_json text
+  idempotency_key text [unique]
+
+  indexes {
+    (profile_id, occurred_at)
+    (profile_id, playable_id, occurred_at)
+    playback_session_id
+  }
+}
+
+Table profile_progress {
+  profile_id text [not null, ref: > profiles.id]
+  playable_id integer [not null, ref: > playable_items.id]
+  position_seconds integer [not null, default: 0]
+  duration_seconds integer
+  completed integer [not null, default: 0]
+  completion_reason text [note: 'PLAYER_ENDED | NEAR_END | USER_DECLARED | IMPORTED']
+  confidence real [not null, default: 0]
+  last_session_id text [ref: > playback_sessions.id]
+  first_started_at text
+  completed_at text
+  updated_at text [not null]
+
+  indexes {
+    (profile_id, playable_id) [pk]
+    (profile_id, completed, updated_at)
+  }
+}
+
+Table reactions {
+  profile_id text [not null, ref: > profiles.id]
+  media_id integer [not null, ref: > media_items.id]
+  reaction text [not null, note: 'LIKE | DISLIKE']
+  created_at text [not null]
+  updated_at text [not null]
+
+  indexes {
+    (profile_id, media_id) [pk]
+  }
+}
+
+Table watchlist_items {
+  profile_id text [not null, ref: > profiles.id]
+  media_id integer [not null, ref: > media_items.id]
+  added_at text [not null]
+
+  indexes {
+    (profile_id, media_id) [pk]
+    (profile_id, added_at)
+  }
+}
+
+Table recommendation_impressions {
+  id integer [pk, increment]
+  profile_id text [not null, ref: > profiles.id]
+  media_id integer [not null, ref: > media_items.id]
+  session_key text [not null]
+  shelf_type text [not null]
+  position integer [not null]
+  score real
+  shown_at text [not null]
+  clicked integer [not null, default: 0]
+  played integer [not null, default: 0]
+  completed integer [not null, default: 0]
+  dismissed integer [not null, default: 0]
+
+  indexes {
+    (profile_id, session_key, media_id, shelf_type) [unique]
+    (profile_id, shown_at)
+    (profile_id, media_id, shown_at)
+  }
+}
+
+Table external_cache {
+  cache_key text [pk]
+  payload text [not null]
+  expires_at text [not null]
+  updated_at text [not null]
+
+  indexes {
+    expires_at
+  }
+}
+
+Table schema_migrations {
+  version text [pk]
+  checksum text [not null]
+  applied_at text [not null]
+}

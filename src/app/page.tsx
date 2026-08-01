@@ -1,10 +1,26 @@
 import { redirect } from "next/navigation";
 import { CineVerseHome } from "@/components/cineverse-home";
 import { getActiveProfileId } from "@/lib/active-profile";
+import { composeHomeProgramming } from "@/lib/home-programming";
 import { buildPersonalizedRecommendations } from "@/lib/recommendations";
-import { getContinueWatching, getDislikes, getLikes } from "@/lib/store";
-import { getCatalogItemsByIds, getHomeCatalog } from "@/lib/tmdb";
-import type { CatalogItem, WatchProgress } from "@/lib/types";
+import {
+  getContinueWatching,
+  getDislikes,
+  getLikes,
+  getRecommendationExposures,
+  getRecommendationLikes,
+  getWatchlist,
+} from "@/lib/store";
+import {
+  getCatalogItemsByIds,
+  getHomeCatalog,
+  getTrailerUrl,
+} from "@/lib/tmdb";
+import type {
+  CatalogItem,
+  WatchProgress,
+  WatchlistRecord,
+} from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -14,15 +30,37 @@ export default async function Home() {
   const progress = getContinueWatching(profileId);
   const likes = getLikes(profileId);
   const dislikes = getDislikes(profileId);
-  const [catalog, refreshedItems, recommendations] = await Promise.all([
+  const recommendationLikes = getRecommendationLikes(profileId);
+  const exposures = getRecommendationExposures(profileId);
+  const watchlist = getWatchlist(profileId);
+  const profileItemRequests = [
+    ...progress.map((item) => ({
+      id: item.tmdbId,
+      mediaType: item.mediaType,
+    })),
+    ...watchlist.map((item) => ({
+      id: item.tmdbId,
+      mediaType: item.mediaType,
+    })),
+  ];
+  const [catalog, refreshedProfileItems, recommendations] = await Promise.all([
     getHomeCatalog(),
-    getCatalogItemsByIds(
-      progress.map((item) => ({ id: item.tmdbId, mediaType: item.mediaType })),
+    getCatalogItemsByIds(profileItemRequests),
+    buildPersonalizedRecommendations(
+      recommendationLikes,
+      dislikes,
+      exposures,
+      watchlist,
     ),
-    buildPersonalizedRecommendations(likes, dislikes),
   ]);
-  const continueWatching = progress.map((item, index) => ({
-    ...(refreshedItems[index] ?? progressToCatalogItem(item)),
+  const refreshedItems = new Map<string, CatalogItem>();
+  profileItemRequests.forEach((request, index) => {
+    const item = refreshedProfileItems[index];
+    if (item) refreshedItems.set(`${request.mediaType}:${request.id}`, item);
+  });
+  const continueWatching = progress.map((item) => ({
+    ...(refreshedItems.get(`${item.mediaType}:${item.tmdbId}`) ??
+      progressToCatalogItem(item)),
     resume: {
       seasonNumber: item.seasonNumber,
       episodeNumber: item.episodeNumber,
@@ -30,11 +68,32 @@ export default async function Home() {
       durationSeconds: item.durationSeconds,
     },
   }));
+  const savedItems = watchlist.map(
+    (item) =>
+      refreshedItems.get(`${item.mediaType}:${item.tmdbId}`) ??
+      watchlistToCatalogItem(item),
+  );
+
+  let programmedCatalog = composeHomeProgramming({
+    catalog,
+    continueWatching,
+    watchlist: savedItems,
+    recommendations,
+    exposures,
+  });
+  if (!programmedCatalog.heroTrailerUrl) {
+    programmedCatalog = {
+      ...programmedCatalog,
+      heroTrailerUrl: await getTrailerUrl(
+        programmedCatalog.hero.mediaType,
+        programmedCatalog.hero.id,
+      ),
+    };
+  }
 
   return (
     <CineVerseHome
-      catalog={catalog}
-      continueWatching={continueWatching}
+      catalog={programmedCatalog}
       initialLikedKeys={likes.map((like) => `${like.mediaType}-${like.tmdbId}`)}
       initialDislikedKeys={dislikes.map(
         (item) => `${item.mediaType}-${item.tmdbId}`,
@@ -42,6 +101,29 @@ export default async function Home() {
       initialRecommendations={recommendations}
     />
   );
+}
+
+function watchlistToCatalogItem(item: WatchlistRecord): CatalogItem {
+  return {
+    id: item.tmdbId,
+    mediaType: item.mediaType,
+    title: item.title,
+    overview: "",
+    posterPath: item.posterPath,
+    backdropPath: item.backdropPath,
+    posterUrl: item.posterPath
+      ? `https://image.tmdb.org/t/p/w342${item.posterPath}`
+      : null,
+    backdropUrl: item.backdropPath
+      ? `https://image.tmdb.org/t/p/w1280${item.backdropPath}`
+      : null,
+    releaseDate: null,
+    voteAverage: 0,
+    voteCount: 0,
+    popularity: 0,
+    genreIds: [],
+    originalLanguage: "",
+  };
 }
 
 function progressToCatalogItem(progress: WatchProgress): CatalogItem {

@@ -127,9 +127,58 @@ domaine officiel change de suffixe, ajoute son origine exacte dans
 `FSTREAM_ALLOWED_ORIGINS`, puis redemarre CineVerse.
 
 Le bloc `Pour vous` combine les recommandations et titres similaires TMDB avec
-les genres, langues, notes et popularite. Un dislike exclut toujours le titre
-concerne et applique seulement une penalite legere aux genres proches afin de
-ne pas sur-apprendre a partir d'un seul avis.
+les genres, langues, notes et popularite. Les likes explicites et les contenus
+termines servent de signaux positifs; un simple lancement ne suffit pas. Un
+dislike exclut toujours le titre concerne et applique seulement une penalite
+legere aux genres proches afin de ne pas sur-apprendre a partir d'un seul avis.
+
+## Profils et statistiques
+
+Chaque profil possede ses propres reprises, likes, dislikes, evenements,
+statistiques et recommandations. Le menu du profil donne acces a
+`/stats`, avec:
+
+- le temps de lecture reellement mesure cette semaine, ce mois et au total;
+- les films, episodes et titres termines;
+- les habitudes de visionnage et les jours actifs;
+- les genres, langues et sources les plus utilises;
+- la progression des series et les abandons probables;
+- un recapitulatif mensuel.
+
+Les evenements sont stockes dans `viewing_events` et les sessions detaillees
+dans `watch_sessions`. Le suivi distingue la progression confirmee par un
+lecteur, le temps estime lorsque l'onglet est visible et le marquage manuel. Un
+marquage manuel compte comme une completion, mais n'ajoute jamais la duree
+officielle au temps regarde.
+
+Sans signal du lecteur, CineVerse envoie un heartbeat local toutes les 15
+secondes. Les intervalles masques, en pause, en buffering ou superieurs a 45
+secondes ne sont pas comptes. Cette mesure reste identifiee comme une
+estimation, car une iframe cross-origin ne permet pas de prouver seule que la
+video joue reellement.
+
+### Extension de suivi optionnelle
+
+Le dossier [`extensions/cineverse-companion`](extensions/cineverse-companion)
+contient une extension Chrome/Chromium Manifest V3. Elle s'execute dans les
+frames des providers autorises et transmet les vrais evenements du
+`HTMLVideoElement`: position, duree, lecture, pause, buffering, seek et fin.
+Elle calcule aussi un temps confirme en excluant les sauts dans la timeline.
+
+Pour l'installer localement, ouvre `chrome://extensions`, active le mode
+developpeur, choisis **Charger l'extension non empaquetee**, puis selectionne
+`extensions/cineverse-companion`. Recharge ensuite CineVerse. Les details et
+limites sont decrits dans le README de l'extension.
+
+Avec cette extension, une fin reelle ou l'arrivee dans les 45 dernieres
+secondes peut terminer le contenu et declencher l'auto-next. Le suivi hybride
+reste actif comme fallback lorsque le provider ou son domaine n'est pas
+observable.
+
+Le compteur confirme avance avec la timeline du media et exclut les pauses,
+le buffering et les sauts. Il continue en arriere-plan lorsque Chromium laisse
+la lecture active. Un clic sur l'icone de l'extension affiche son diagnostic en
+direct.
 
 ## Sources video
 
@@ -227,6 +276,9 @@ Exemple:
 - `GET /api/dislikes` liste les contenus ignores.
 - `POST /api/dislikes` ajoute ou retire un dislike.
 - `GET /api/recommendations` renvoie des recommandations basees sur les likes et dislikes.
+- `POST /api/events` enregistre un signal de navigation ou de lecture pour le profil actif.
+- `POST /api/watch-sessions` valide les heartbeats et agrege le suivi hybride.
+- `GET /stats` affiche les statistiques du profil actif.
 
 ## Git
 

@@ -1,0 +1,61 @@
+{
+  "manifest_version": 3,
+  "name": "CineVerse Companion",
+  "version": "0.2.1",
+  "description": "Transmet a CineVerse la progression reelle des lecteurs video autorises.",
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "permissions": ["activeTab"],
+  "host_permissions": [
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "https://*.vidzy.org/*",
+    "https://*.vidzy.cc/*",
+    "https://*.uqload.is/*",
+    "https://*.uqload.com/*",
+    "https://*.uqload.co/*",
+    "https://*.uqload.to/*",
+    "https://*.voe.sx/*",
+    "https://*.kokoflix.lol/*",
+    "https://*.kakaflix.lol/*",
+    "https://*.filmoon.sx/*",
+    "https://*.netu.tv/*",
+    "https://*.waaw.to/*"
+  ],
+  "action": {
+    "default_title": "Etat du suivi CineVerse",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://localhost/*",
+        "http://127.0.0.1/*"
+      ],
+      "js": ["cineverse-bridge.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://*.vidzy.org/*",
+        "https://*.vidzy.cc/*",
+        "https://*.uqload.is/*",
+        "https://*.uqload.com/*",
+        "https://*.uqload.co/*",
+        "https://*.uqload.to/*",
+        "https://*.voe.sx/*",
+        "https://*.kokoflix.lol/*",
+        "https://*.kakaflix.lol/*",
+        "https://*.filmoon.sx/*",
+        "https://*.netu.tv/*",
+        "https://*.waaw.to/*"
+      ],
+      "js": ["media-observer.js"],
+      "all_frames": true,
+      "match_about_blank": true,
+      "match_origin_as_fallback": true,
+      "run_at": "document_start"
+    }
+  ]
+}

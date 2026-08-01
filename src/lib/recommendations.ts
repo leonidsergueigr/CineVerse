@@ -12,12 +12,20 @@ import type {
   LikeRecord,
   MediaType,
   PersonalizedRecommendation,
+  RecommendationExposure,
   RecommendationResult,
+  WatchlistRecord,
 } from "@/lib/types";
 
-const MAX_SEEDS = 8;
+const MAX_LIKE_SEEDS = 8;
+const MAX_WATCHLIST_SEEDS = 4;
 const MAX_NEGATIVE_SIGNALS = 16;
 const MAX_RESULTS = 18;
+
+type PositiveSeed = LikeRecord & {
+  strength: number;
+  origin: "liked" | "completed" | "watchlist";
+};
 
 type Candidate = {
   item: CatalogItem;
@@ -30,11 +38,30 @@ type Candidate = {
 export async function buildPersonalizedRecommendations(
   likes: LikeRecord[],
   dislikes: DislikeRecord[] = [],
+  exposures: RecommendationExposure[] = [],
+  watchlist: WatchlistRecord[] = [],
 ): Promise<RecommendationResult> {
-  const seeds = likes.slice(0, MAX_SEEDS);
+  const likedKeys = new Set(likes.map((like) => feedbackKey(like)));
+  const seeds: PositiveSeed[] = [
+    ...likes.slice(0, MAX_LIKE_SEEDS).map((item) => ({
+      ...item,
+      strength: item.signalStrength ?? 1,
+      origin: item.signalOrigin ?? ("liked" as const),
+    })),
+    ...watchlist
+      .filter((item) => !likedKeys.has(feedbackKey(item)))
+      .slice(0, MAX_WATCHLIST_SEEDS)
+      .map((item) => ({
+        ...item,
+        likedAt: item.addedAt,
+        strength: 0.45,
+        origin: "watchlist" as const,
+      })),
+  ];
   const negativeSignals = dislikes.slice(0, MAX_NEGATIVE_SIGNALS);
   const emptyProfile = {
     likeCount: likes.length,
+    watchlistCount: watchlist.length,
     dislikeCount: dislikes.length,
     movieCount: likes.filter((like) => like.mediaType === "movie").length,
     seriesCount: likes.filter((like) => like.mediaType === "tv").length,
@@ -62,7 +89,8 @@ export async function buildPersonalizedRecommendations(
 
   seedItems.forEach((item, index) => {
     if (!item) return;
-    const recencyWeight = Math.max(0.65, 1 - index * 0.05);
+    const recencyWeight =
+      Math.max(0.65, 1 - index * 0.05) * seeds[index].strength;
     addWeight(languageWeights, item.originalLanguage, recencyWeight);
 
     (["movie", "tv"] as const).forEach((targetType) => {
@@ -108,12 +136,24 @@ export async function buildPersonalizedRecommendations(
     mergeCandidate(candidates, item, "discovery"),
   );
 
-  const likedKeys = new Set(likes.map((like) => feedbackKey(like)));
+  const positiveKeys = new Set(seeds.map((seed) => feedbackKey(seed)));
   const dislikedKeys = new Set(dislikes.map((item) => feedbackKey(item)));
+  const exposureByItem = new Map(
+    exposures.map((item) => [
+      `${item.mediaType}:${item.tmdbId}`,
+      item,
+    ]),
+  );
   const scored = [...candidates.values()]
     .filter(
-      ({ item }) =>
-        !likedKeys.has(itemKey(item)) && !dislikedKeys.has(itemKey(item)),
+      ({ item }) => {
+        const exposure = exposureByItem.get(itemKey(item));
+        return (
+          !positiveKeys.has(itemKey(item)) &&
+          !dislikedKeys.has(itemKey(item)) &&
+          !isCoolingDown(exposure)
+        );
+      },
     )
     .map((candidate) =>
       scoreCandidate(
@@ -123,6 +163,7 @@ export async function buildPersonalizedRecommendations(
         genrePenalties,
         languagePenalties,
         seeds,
+        exposureByItem.get(itemKey(candidate.item)),
       ),
     )
     .filter((item) => item.posterUrl && item.voteCount > 0)
@@ -168,7 +209,8 @@ function scoreCandidate(
   languageWeights: Map<string, number>,
   genrePenalties: Record<MediaType, Map<number, number>>,
   languagePenalties: Map<string, number>,
-  seeds: LikeRecord[],
+  seeds: PositiveSeed[],
+  exposure?: RecommendationExposure,
 ): PersonalizedRecommendation {
   const { item } = candidate;
   const genreScore = item.genreIds.reduce(
@@ -183,11 +225,21 @@ function scoreCandidate(
   );
   const negativeLanguageScore =
     languagePenalties.get(item.originalLanguage) ?? 0;
-  const typeLikes = seeds.filter((seed) => seed.mediaType === item.mediaType).length;
+  const typeLikes = seeds
+    .filter((seed) => seed.mediaType === item.mediaType)
+    .reduce((sum, seed) => sum + seed.strength, 0);
+  const totalSeedStrength = seeds.reduce(
+    (sum, seed) => sum + seed.strength,
+    0,
+  );
   const qualityScore =
     item.voteAverage * 0.55 +
     Math.log10(item.voteCount + 1) * 0.7 +
     Math.log10(item.popularity + 1) * 0.3;
+  const exposurePenalty = exposure
+    ? ignoredExposureCount(exposure) * 2.25 +
+      Math.max(0, exposure.shownCount - 1) * 0.75
+    : 0;
   const score =
     candidate.recommendationHits * 8 +
     candidate.similarHits * 4 +
@@ -196,8 +248,9 @@ function scoreCandidate(
     languageScore +
     negativeGenreScore * -1.15 +
     negativeLanguageScore * -0.45 +
-    (typeLikes / seeds.length) * 2 +
-    qualityScore;
+    (typeLikes / Math.max(0.1, totalSeedStrength)) * 2 +
+    qualityScore -
+    exposurePenalty;
 
   const sourceTitles = [...candidate.sourceTitles];
   const strongestGenre = item.genreIds
@@ -229,19 +282,35 @@ function recommendationReason(
 
   const sourceTitle = sourceTitles[0];
   if (sourceTitle) {
-    const variants = [
-      `Parce que ${sourceTitle} vous a plu`,
-      strongestGenre
-        ? `${strongestGenre}, dans la veine de ${sourceTitle}`
-        : `Dans la veine de ${sourceTitle}`,
-      `Une piste proche de ${sourceTitle}`,
-    ];
+    const variants = strongestGenre
+      ? [
+          `Base sur ${sourceTitle} · ${strongestGenre}`,
+          `${strongestGenre}, proche de ${sourceTitle}`,
+          `Dans la veine de ${sourceTitle} · ${strongestGenre}`,
+        ]
+      : [
+          `Parce que ${sourceTitle} vous a plu`,
+          `Dans la veine de ${sourceTitle}`,
+          `Une piste proche de ${sourceTitle}`,
+        ];
     return variants[Math.abs(item.id) % variants.length];
   }
 
   return strongestGenre
     ? `Dans vos genres favoris : ${strongestGenre}`
     : "Selectionnee selon vos gouts";
+}
+
+function isCoolingDown(exposure: RecommendationExposure | undefined) {
+  if (!exposure) return false;
+  const ignored = ignoredExposureCount(exposure);
+  const cooldown =
+    ignored >= 4 ? 14 * DAY_MS : ignored >= 3 ? 7 * DAY_MS : 0;
+  return cooldown > 0 && Date.now() - exposure.lastShownAt < cooldown;
+}
+
+function ignoredExposureCount(exposure: RecommendationExposure) {
+  return Math.max(0, exposure.ignoredCount);
 }
 
 function diversify(
@@ -349,3 +418,5 @@ function mapGenre(
   if (mapped) return mapped;
   return targetGenres.some((genre) => genre.id === genreId) ? genreId : null;
 }
+
+const DAY_MS = 24 * 60 * 60 * 1000;

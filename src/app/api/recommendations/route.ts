@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 import { getActiveProfileId } from "@/lib/active-profile";
 import { buildPersonalizedRecommendations } from "@/lib/recommendations";
-import { getDislikes, getLikes } from "@/lib/store";
+import {
+  getDislikes,
+  getRecommendationExposures,
+  getRecommendationLikes,
+  getWatchlist,
+} from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -14,8 +19,10 @@ export async function GET() {
     );
   }
   const result = await buildPersonalizedRecommendations(
-    getLikes(profileId),
+    getRecommendationLikes(profileId),
     getDislikes(profileId),
+    getRecommendationExposures(profileId),
+    getWatchlist(profileId),
   );
   return NextResponse.json(result, {
     headers: { "Cache-Control": "no-store" },

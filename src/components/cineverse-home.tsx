@@ -5,15 +5,25 @@ import {
   ChevronLeft,
   ChevronRight,
   Heart,
+  Info,
   LoaderCircle,
   Play,
+  RefreshCw,
   Star,
   ThumbsDown,
   X,
 } from "lucide-react";
-import type { ReactNode } from "react";
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import type { CSSProperties, ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import { GENRES, LANGUAGES, SERIES_GENRES } from "@/lib/genres";
+import { trackClientEvent } from "@/lib/client-events";
 import type {
   BrowseCatalog,
   CatalogFilters,
@@ -26,14 +36,9 @@ import { SiteHeader } from "@/components/site-header";
 
 type Props = {
   catalog: HomeCatalog;
-  continueWatching: CatalogItem[];
   initialLikedKeys: string[];
   initialDislikedKeys: string[];
   initialRecommendations: RecommendationResult;
-};
-
-type HomeSection = CatalogSection & {
-  personalized?: boolean;
 };
 
 type YouTubePlayer = {
@@ -75,7 +80,6 @@ let youtubeApiPromise: Promise<YouTubeNamespace> | null = null;
 
 export function CineVerseHome({
   catalog,
-  continueWatching,
   initialLikedKeys,
   initialDislikedKeys,
   initialRecommendations,
@@ -90,6 +94,15 @@ export function CineVerseHome({
   const [recommendations, setRecommendations] = useState(initialRecommendations);
   const [recommendationsLoading, setRecommendationsLoading] = useState(false);
   const [heroIndex, setHeroIndex] = useState(0);
+  const [heroLikePulse, setHeroLikePulse] = useState(false);
+  const [previousHeroBackground, setPreviousHeroBackground] = useState<
+    string | null
+  >(null);
+  const [impressionSessionId] = useState(
+    () => getHomeSessionId(catalog.programmingSessionId),
+  );
+  const recordedImpressions = useRef(new Set<string>());
+  const heroTransitionTimer = useRef<number | null>(null);
   const heroCandidates = useMemo(
     () =>
       uniqueItems([
@@ -110,34 +123,93 @@ export function CineVerseHome({
     hero.id === catalog.hero.id && hero.mediaType === catalog.hero.mediaType
       ? catalog.heroTrailerUrl
       : null;
-
-  useEffect(() => {
-    if (heroCandidates.length < 2) return;
-    const timer = window.setInterval(() => {
-      setHeroIndex((current) => (current + 1) % heroCandidates.length);
-    }, 18000);
-    return () => window.clearInterval(timer);
-  }, [heroCandidates.length]);
+  const heroReason =
+    catalog.heroReasons?.[`${hero.mediaType}:${hero.id}`] ??
+    ("reason" in hero ? String(hero.reason) : "Selectionne pour cette visite.");
 
   const sections = useMemo(() => {
-    const result: HomeSection[] = [
-      ...(continueWatching.length
-        ? [{ id: "resume", title: "Reprendre la lecture", items: continueWatching }]
-        : []),
-      ...(recommendations.items.length
-        ? [
+    const refreshed = catalog.sections.map((section) =>
+      section.id === "for-you" && recommendations.items.length
+        ? { ...section, items: recommendations.items.slice(0, 12) }
+        : section,
+    );
+    return dedupeSections(refreshed, hero);
+  }, [catalog.sections, hero, recommendations.items]);
+
+  const recordImpression = useCallback(
+    (item: CatalogItem, shelfType: string, position: number) => {
+      const sessionId = impressionSessionId;
+      if (!sessionId) return;
+      const key = `${sessionId}:${shelfType}:${item.mediaType}:${item.id}`;
+      if (recordedImpressions.current.has(key)) return;
+      recordedImpressions.current.add(key);
+      void fetch("/api/recommendations/impressions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        keepalive: true,
+        body: JSON.stringify({
+          sessionId,
+          items: [
             {
-              id: "for-you",
-              title: "Pour vous",
-              items: recommendations.items,
-              personalized: true,
+              tmdbId: item.id,
+              mediaType: item.mediaType,
+              shelfType,
+              position,
+              score: "score" in item ? Number(item.score) : undefined,
             },
-          ]
-        : []),
-      ...catalog.sections,
-    ];
-    return result;
-  }, [catalog.sections, continueWatching, recommendations.items]);
+          ],
+        }),
+      }).catch(() => undefined);
+    },
+    [impressionSessionId],
+  );
+
+  useEffect(() => {
+    recordImpression(hero, "hero", heroIndex);
+  }, [hero, heroIndex, recordImpression]);
+
+  useEffect(
+    () => () => {
+      if (heroTransitionTimer.current) {
+        window.clearTimeout(heroTransitionTimer.current);
+      }
+    },
+    [],
+  );
+
+  function advanceHero() {
+    if (heroCandidates.length <= 1) return;
+    if (heroTransitionTimer.current) {
+      window.clearTimeout(heroTransitionTimer.current);
+    }
+    setPreviousHeroBackground(heroBackground);
+    setHeroIndex((current) => (current + 1) % heroCandidates.length);
+    heroTransitionTimer.current = window.setTimeout(() => {
+      setPreviousHeroBackground(null);
+      heroTransitionTimer.current = null;
+    }, 650);
+  }
+
+  function markImpression(
+    item: CatalogItem,
+    action: "clicked" | "dismissed",
+    shelfType = "interaction",
+  ) {
+    const sessionId = impressionSessionId;
+    if (!sessionId) return;
+    void fetch("/api/recommendations/impressions", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      keepalive: true,
+      body: JSON.stringify({
+        sessionId,
+        tmdbId: item.id,
+        mediaType: item.mediaType,
+        action,
+        shelfType,
+      }),
+    }).catch(() => undefined);
+  }
 
   function toggleLike(item: CatalogItem) {
     const key = `${item.mediaType}-${item.id}`;
@@ -156,7 +228,10 @@ export function CineVerseHome({
     setDisliked((current) => ({ ...current, [key]: next }));
     if (next) {
       setLiked((current) => ({ ...current, [key]: false }));
-      setHeroIndex((current) => current + 1);
+      if (item.id === hero.id && item.mediaType === hero.mediaType) {
+        advanceHero();
+      }
+      markImpression(item, "dismissed");
     }
 
     void syncPreference(item, "dislike", next, key, previous);
@@ -185,6 +260,7 @@ export function CineVerseHome({
           backdropPath: item.backdropPath,
           genreIds: item.genreIds,
           originalLanguage: item.originalLanguage,
+          timezoneOffsetMinutes: new Date().getTimezoneOffset(),
           [preference === "like" ? "liked" : "disliked"]: next,
         }),
       });
@@ -214,23 +290,35 @@ export function CineVerseHome({
       <section className="relative min-h-[82vh] overflow-hidden">
         {heroBackground ? (
           <img
+            key={`backdrop-${hero.mediaType}-${hero.id}`}
             src={heroBackground}
             alt=""
-            className="absolute inset-0 h-full w-full object-cover brightness-90"
+            className="hero-backdrop-enter absolute inset-0 h-full w-full object-cover brightness-90"
           />
         ) : (
           <div className="poster-fallback absolute inset-0" />
         )}
+        {previousHeroBackground ? (
+          <div
+            aria-hidden="true"
+            className="hero-backdrop-exit absolute inset-0 z-[1] bg-cover bg-center brightness-90"
+            style={{ backgroundImage: `url("${previousHeroBackground}")` }}
+          />
+        ) : null}
         {heroTrailerUrl ? (
           <HeroTrailer
-            key={`${hero.mediaType}-${hero.id}`}
+            key={`trailer-${hero.mediaType}-${hero.id}`}
             url={heroTrailerUrl}
             title={hero.title}
           />
         ) : null}
-        <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(5,5,5,.94)_0%,rgba(5,5,5,.62)_34%,rgba(5,5,5,.1)_72%),linear-gradient(0deg,#050505_0%,rgba(5,5,5,.04)_38%,rgba(5,5,5,.34)_100%)]" />
+        <div className="absolute inset-0 z-[2] bg-[linear-gradient(90deg,rgba(5,5,5,.94)_0%,rgba(5,5,5,.62)_34%,rgba(5,5,5,.1)_72%),linear-gradient(0deg,#050505_0%,rgba(5,5,5,.04)_38%,rgba(5,5,5,.34)_100%)]" />
         <div className="relative z-10 mx-auto flex min-h-[82vh] max-w-7xl flex-col justify-end px-4 pb-16 pt-28 sm:px-6 lg:px-8">
           <div className="max-w-3xl">
+            <p className="mb-4 inline-flex items-center gap-2 text-xs font-bold uppercase text-zinc-300">
+              <Info className="h-4 w-4 text-[#e50914]" />
+              Notre choix pour vous
+            </p>
             <div className="mb-4 flex items-center gap-3 text-sm font-semibold text-zinc-200">
               <span className="rounded-sm bg-[#e50914] px-2 py-1 text-white">
                 {hero.mediaType === "movie" ? "FILM" : "SERIE"}
@@ -243,75 +331,149 @@ export function CineVerseHome({
                 </span>
               ) : null}
             </div>
-            <h1 className="text-5xl font-black leading-none tracking-normal sm:text-7xl">
+            <h1 className="line-clamp-2 text-4xl font-black leading-none tracking-normal sm:text-6xl lg:text-7xl">
               {hero.title}
             </h1>
-            <p className="mt-5 max-w-2xl text-base leading-7 text-zinc-200 sm:text-lg">
+            <p className="mt-5 line-clamp-3 min-h-[5.25rem] max-w-2xl overflow-hidden text-base leading-7 text-zinc-200 sm:text-lg">
               {hero.overview}
             </p>
-            <div className="mt-8 flex flex-wrap gap-3">
+            <p className="mt-4 line-clamp-2 min-h-12 max-w-2xl overflow-hidden border-l-2 border-[#e50914] pl-3 text-sm leading-6 text-zinc-300">
+              {heroReason}
+            </p>
+            <div className="mt-7 inline-flex max-w-full flex-wrap items-center gap-2 rounded-lg bg-black/30 p-2 shadow-2xl ring-1 ring-white/10 backdrop-blur-md">
               <Link
                 href={`/watch/${hero.mediaType}/${hero.id}`}
-                className="inline-flex h-12 items-center gap-2 rounded bg-white px-5 text-sm font-bold text-black transition hover:bg-zinc-200"
+                onClick={() => {
+                  markImpression(hero, "clicked", "hero");
+                  trackClientEvent({
+                    eventType: "RECOMMENDATION_CLICKED",
+                    tmdbId: hero.id,
+                    mediaType: hero.mediaType,
+                    title: hero.title,
+                    posterPath: hero.posterPath,
+                    genreIds: hero.genreIds,
+                    metadata: { reason: heroReason, placement: "hero" },
+                  });
+                }}
+                className="inline-flex h-11 items-center gap-2 rounded bg-white px-5 text-sm font-bold text-black transition hover:bg-zinc-200"
               >
                 <Play className="h-5 w-5 fill-black" />
                 Regarder
               </Link>
-              <button
-                type="button"
-                onClick={() => toggleLike(hero)}
-                className="inline-flex h-12 items-center gap-2 rounded bg-zinc-900/85 px-5 text-sm font-bold text-white ring-1 ring-white/15 transition hover:bg-zinc-800"
-              >
-                <Heart
-                  className={`h-5 w-5 ${liked[`${hero.mediaType}-${hero.id}`] ? "fill-[#e50914] text-[#e50914]" : ""}`}
-                />
-                {"J'aime"}
-              </button>
-              <button
-                type="button"
-                onClick={() => toggleDislike(hero)}
-                aria-pressed={Boolean(disliked[`${hero.mediaType}-${hero.id}`])}
-                className={`inline-flex h-12 items-center gap-2 rounded px-5 text-sm font-bold ring-1 transition ${
-                  disliked[`${hero.mediaType}-${hero.id}`]
-                    ? "bg-white text-black ring-white"
-                    : "bg-zinc-900/85 text-white ring-white/15 hover:bg-zinc-800"
-                }`}
-              >
-                <ThumbsDown
-                  className={`h-5 w-5 ${
-                    disliked[`${hero.mediaType}-${hero.id}`] ? "fill-black" : ""
+              <div className="inline-flex overflow-hidden rounded bg-zinc-950/75 ring-1 ring-white/15">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setHeroLikePulse(true);
+                    toggleLike(hero);
+                  }}
+                  aria-label="J'aime"
+                  title="J'aime"
+                  aria-pressed={Boolean(liked[`${hero.mediaType}-${hero.id}`])}
+                  className="inline-flex h-11 w-11 items-center justify-center text-zinc-100 transition hover:bg-white/10"
+                >
+                  <Heart
+                    onAnimationEnd={() => setHeroLikePulse(false)}
+                    className={`h-5 w-5 ${
+                      liked[`${hero.mediaType}-${hero.id}`]
+                        ? "fill-[#e50914] text-[#e50914]"
+                        : ""
+                    } ${heroLikePulse ? "like-pop" : ""}`}
+                  />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => toggleDislike(hero)}
+                  aria-label="Pas pour moi"
+                  title="Pas pour moi"
+                  aria-pressed={Boolean(disliked[`${hero.mediaType}-${hero.id}`])}
+                  className={`inline-flex h-11 w-11 items-center justify-center border-l border-white/10 transition ${
+                    disliked[`${hero.mediaType}-${hero.id}`]
+                      ? "bg-white text-black"
+                      : "text-zinc-100 hover:bg-white/10"
                   }`}
-                />
-                Pas pour moi
-              </button>
+                >
+                  <ThumbsDown
+                    className={`h-5 w-5 ${
+                      disliked[`${hero.mediaType}-${hero.id}`]
+                        ? "fill-black"
+                        : ""
+                    }`}
+                  />
+                </button>
+              </div>
+              {heroCandidates.length > 1 ? (
+                <button
+                  type="button"
+                  onClick={advanceHero}
+                  aria-label="Autre proposition"
+                  title="Autre proposition"
+                  className="inline-flex h-11 w-11 items-center justify-center rounded bg-zinc-950/75 text-white ring-1 ring-white/15 transition hover:bg-white/10"
+                >
+                  <RefreshCw className="h-5 w-5" />
+                </button>
+              ) : null}
             </div>
           </div>
         </div>
       </section>
 
       <div id="catalog" className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
+        <nav
+          aria-label="Sections de l'accueil"
+          className="scrollbar-none mb-8 flex gap-2 overflow-x-auto border-b border-white/10 pb-4"
+        >
+          {sections.map((section) => (
+            <a
+              key={`shortcut-${section.id}`}
+              href={`#${section.id}`}
+              className="shrink-0 rounded border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-semibold text-zinc-300 transition hover:border-white/30 hover:bg-white/[0.08] hover:text-white"
+            >
+              {section.title}
+            </a>
+          ))}
+        </nav>
+
         {sections.map((section) => (
-          <section key={section.id} id={section.id} className="mb-10">
+          <CatalogRevealSection
+            key={section.id}
+            id={section.id}
+          >
             <div className="mb-4 flex min-h-8 flex-wrap items-end justify-between gap-3">
               <div>
-                <h2 className="text-xl font-bold tracking-normal">{section.title}</h2>
-                {section.personalized ? (
-                  <p className="mt-1 text-xs text-zinc-500">
-                    {recommendations.profile.likeCount} titre
-                    {recommendations.profile.likeCount > 1 ? "s" : ""} aime
-                    {recommendations.profile.likeCount > 1 ? "s" : ""}
-                    {recommendations.profile.topGenres.length
-                      ? ` · ${recommendations.profile.topGenres.map((genre) => genre.name).join(" · ")}`
-                      : ""}
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-xl font-bold tracking-normal">
+                    {section.title}
+                  </h2>
+                  {section.id.startsWith("new-") ? (
+                    <span className="rounded-sm bg-[#f5c542]/15 px-2 py-1 text-[10px] font-black uppercase text-[#f5c542] ring-1 ring-[#f5c542]/30">
+                      Nouveau
+                    </span>
+                  ) : null}
+                </div>
+                {section.reason ? (
+                  <p className="mt-1 max-w-2xl text-sm leading-5 text-zinc-500">
+                    {section.reason}
                   </p>
                 ) : null}
               </div>
-              {section.personalized && recommendationsLoading ? (
-                <LoaderCircle className="h-4 w-4 animate-spin text-zinc-500" />
-              ) : null}
+              <div className="flex items-center gap-3">
+                {section.personalized && recommendationsLoading ? (
+                  <LoaderCircle className="h-4 w-4 animate-spin text-zinc-500" />
+                ) : null}
+                {sectionBrowseHref(section.id) ? (
+                  <Link
+                    href={sectionBrowseHref(section.id) ?? "/browse"}
+                    className="inline-flex items-center gap-1 text-xs font-bold text-zinc-400 transition hover:text-white"
+                  >
+                    Voir tout
+                    <ChevronRight className="h-4 w-4" />
+                  </Link>
+                ) : null}
+              </div>
             </div>
             <HorizontalCarousel label={section.title}>
-              {section.items.map((item) => (
+              {section.items.map((item, position) => (
                 <MediaCard
                   key={`${section.id}-${item.mediaType}-${item.id}`}
                   item={item}
@@ -319,18 +481,67 @@ export function CineVerseHome({
                   disliked={Boolean(disliked[`${item.mediaType}-${item.id}`])}
                   onLike={toggleLike}
                   onDislike={toggleDislike}
+                  onOpen={(item) =>
+                    markImpression(item, "clicked", section.id)
+                  }
+                  onImpression={(item) =>
+                    recordImpression(item, section.id, position)
+                  }
                   reason={
                     section.personalized && "reason" in item
                       ? String(item.reason)
                       : undefined
                   }
+                  animationIndex={position}
                 />
               ))}
             </HorizontalCarousel>
-          </section>
+          </CatalogRevealSection>
         ))}
       </div>
     </main>
+  );
+}
+
+function CatalogRevealSection({
+  children,
+  id,
+}: {
+  children: ReactNode;
+  id: string;
+}) {
+  const sectionRef = useRef<HTMLElement>(null);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    const section = sectionRef.current;
+    if (!section) return;
+    if (!("IntersectionObserver" in window)) {
+      const frame = globalThis.requestAnimationFrame(() => setVisible(true));
+      return () => globalThis.cancelAnimationFrame(frame);
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry?.isIntersecting) return;
+        setVisible(true);
+        observer.disconnect();
+      },
+      { rootMargin: "80px 0px", threshold: 0.08 },
+    );
+    observer.observe(section);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <section
+      ref={sectionRef}
+      id={id}
+      className={`catalog-row-reveal mb-14 scroll-mt-24 ${
+        visible ? "is-visible" : ""
+      }`}
+    >
+      {children}
+    </section>
   );
 }
 
@@ -364,7 +575,7 @@ function HorizontalCarousel({
       </button>
       <div
         ref={scrollRef}
-        className="scrollbar-none grid auto-cols-[150px] grid-flow-col gap-3 overflow-x-auto pb-2 sm:auto-cols-[190px]"
+        className="scrollbar-none grid touch-pan-x auto-cols-[150px] grid-flow-col gap-3 overflow-x-auto overscroll-x-contain pb-2 sm:auto-cols-[190px]"
       >
         {children}
       </div>
@@ -376,6 +587,24 @@ function HorizontalCarousel({
       >
         <ChevronRight className="h-5 w-5" />
       </button>
+      <div className="mt-3 flex justify-end gap-2 md:hidden">
+        <button
+          type="button"
+          onClick={() => scroll(-1)}
+          className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/[0.07] text-zinc-200 ring-1 ring-white/15"
+          aria-label={`Faire defiler ${label} vers la gauche`}
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={() => scroll(1)}
+          className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/[0.07] text-zinc-200 ring-1 ring-white/15"
+          aria-label={`Faire defiler ${label} vers la droite`}
+        >
+          <ChevronRight className="h-4 w-4" />
+        </button>
+      </div>
     </div>
   );
 }
@@ -478,6 +707,22 @@ export function BrowseExperience({
     Object.fromEntries(initialDislikedKeys.map((key) => [key, true])),
   );
 
+  useEffect(() => {
+    const activeFilters = Object.fromEntries(
+      Object.entries(catalog.filters).filter(([, value]) => Boolean(value)),
+    );
+    if (!Object.keys(activeFilters).length) return;
+    trackClientEvent({
+      eventType: "FILTER_APPLIED",
+      mediaType:
+        catalog.filters.mediaType === "movie" ||
+        catalog.filters.mediaType === "tv"
+          ? catalog.filters.mediaType
+          : undefined,
+      metadata: { filters: activeFilters },
+    });
+  }, [catalog.filters]);
+
   function toggleLike(item: CatalogItem) {
     const key = `${item.mediaType}-${item.id}`;
     const next = !liked[key];
@@ -515,6 +760,7 @@ export function BrowseExperience({
           backdropPath: item.backdropPath,
           genreIds: item.genreIds,
           originalLanguage: item.originalLanguage,
+          timezoneOffsetMinutes: new Date().getTimezoneOffset(),
           [preference === "like" ? "liked" : "disliked"]: next,
         }),
       }).then((response) => {
@@ -745,22 +991,36 @@ function MediaCard({
   disliked,
   onLike,
   onDislike,
+  onOpen,
+  onImpression,
   compact = false,
   reason,
+  animationIndex = 0,
 }: {
   item: CatalogItem;
   liked: boolean;
   disliked: boolean;
   onLike: (item: CatalogItem) => void;
   onDislike: (item: CatalogItem) => void;
+  onOpen?: (item: CatalogItem) => void;
+  onImpression?: (item: CatalogItem) => void;
   compact?: boolean;
   reason?: string;
+  animationIndex?: number;
 }) {
+  const cardRef = useRef<HTMLElement>(null);
+  const posterImageRef = useRef<HTMLImageElement>(null);
+  const impressionRecorded = useRef(false);
+  const [posterLoaded, setPosterLoaded] = useState(false);
+  const [posterFailed, setPosterFailed] = useState(false);
+  const [likePulse, setLikePulse] = useState(false);
   const watchHref = item.resume
     ? `/watch/${item.mediaType}/${item.id}${
         item.mediaType === "tv" &&
         item.resume.seasonNumber !== null &&
-        item.resume.episodeNumber !== null
+        item.resume.seasonNumber > 0 &&
+        item.resume.episodeNumber !== null &&
+        item.resume.episodeNumber > 0
           ? `?season=${item.resume.seasonNumber}&episode=${item.resume.episodeNumber}`
           : ""
       }`
@@ -773,28 +1033,97 @@ function MediaCard({
         )
       : 0;
 
+  useEffect(() => {
+    const image = posterImageRef.current;
+    if (!image?.complete) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (image.naturalWidth > 0) setPosterLoaded(true);
+      else setPosterFailed(true);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [item.posterUrl]);
+
+  useEffect(() => {
+    const element = cardRef.current;
+    if (!element || !onImpression || impressionRecorded.current) return;
+    if (!("IntersectionObserver" in window)) {
+      impressionRecorded.current = true;
+      onImpression(item);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry?.isIntersecting || entry.intersectionRatio < 0.55) return;
+        impressionRecorded.current = true;
+        onImpression(item);
+        observer.disconnect();
+      },
+      { threshold: [0.55] },
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [item, onImpression]);
+
   return (
-    <article className="group relative">
+    <article
+      ref={cardRef}
+      className="row-card group relative"
+      style={
+        {
+          "--card-delay": `${Math.min(animationIndex, 8) * 40}ms`,
+        } as CSSProperties
+      }
+    >
       <Link
         href={watchHref}
-        className="block overflow-hidden rounded bg-zinc-900 ring-1 ring-white/10 transition duration-200 hover:scale-[1.03] hover:ring-white/30"
+        onClick={() => {
+          onOpen?.(item);
+          if (!reason) return;
+          trackClientEvent({
+            eventType: "RECOMMENDATION_CLICKED",
+            tmdbId: item.id,
+            mediaType: item.mediaType,
+            title: item.title,
+            posterPath: item.posterPath,
+            genreIds: item.genreIds,
+            metadata: { reason },
+          });
+        }}
+        className="block overflow-hidden rounded bg-zinc-900 shadow-black/50 ring-1 ring-white/10 transition duration-200 hover:-translate-y-1 hover:scale-[1.04] hover:shadow-2xl hover:ring-white/30"
       >
         <div
           suppressHydrationWarning
-          className="relative aspect-[2/3] bg-zinc-900"
+          className={`relative aspect-[2/3] overflow-hidden bg-zinc-900 ${
+            item.posterUrl && !posterLoaded && !posterFailed
+              ? "poster-shimmer"
+              : ""
+          }`}
         >
-          {item.posterUrl ? (
+          {item.posterUrl && !posterFailed ? (
+            <div className="poster-fallback absolute inset-0 flex items-end p-3">
+              <span className="line-clamp-3 text-sm font-black leading-tight text-white/60">
+                {item.title}
+              </span>
+            </div>
+          ) : null}
+          {item.posterUrl && !posterFailed ? (
             <img
+              ref={posterImageRef}
               src={item.posterUrl}
               alt={item.title}
-              className="h-full w-full object-cover"
+              className={`relative h-full w-full object-cover transition-opacity duration-300 ${
+                posterLoaded ? "opacity-100" : "opacity-0"
+              }`}
               loading="lazy"
+              onLoad={() => setPosterLoaded(true)}
+              onError={() => setPosterFailed(true)}
             />
           ) : (
             <div className="poster-fallback flex h-full w-full items-end p-3">
               <span className="text-sm font-black leading-tight">{item.title}</span>
             </div>
           )}
+          <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black/75 via-black/35 to-transparent" />
           {item.voteCount > 0 && item.voteAverage > 0 ? (
             <div className="absolute left-2 top-2 inline-flex h-8 items-center gap-1 rounded bg-black/85 px-2 text-xs font-black text-white shadow-lg ring-1 ring-white/20 backdrop-blur">
               <Star className="h-3.5 w-3.5 fill-[#f5c542] text-[#f5c542]" />
@@ -805,7 +1134,7 @@ function MediaCard({
           {item.resume ? (
             <div className="absolute inset-x-0 bottom-0 h-1.5 bg-white/25">
               <span
-                className="block h-full bg-[#e50914]"
+                className="progress-fill block h-full bg-[#e50914]"
                 style={{ width: `${resumePercent}%` }}
               />
             </div>
@@ -837,11 +1166,19 @@ function MediaCard({
       </Link>
       <button
         type="button"
-        onClick={() => onLike(item)}
+        onClick={() => {
+          setLikePulse(true);
+          onLike(item);
+        }}
         className="absolute right-2 top-2 z-10 inline-flex h-8 w-8 items-center justify-center rounded bg-black/85 text-zinc-100 shadow-lg ring-1 ring-white/20 backdrop-blur transition hover:bg-[#e50914] hover:text-white"
         aria-label="J'aime"
       >
-        <Heart className={`h-4 w-4 ${liked ? "fill-[#e50914] text-[#e50914]" : ""}`} />
+        <Heart
+          onAnimationEnd={() => setLikePulse(false)}
+          className={`h-4 w-4 ${
+            liked ? "fill-[#e50914] text-[#e50914]" : ""
+          } ${likePulse ? "like-pop" : ""}`}
+        />
       </button>
       <button
         type="button"
@@ -866,15 +1203,32 @@ function resumeLabel(item: CatalogItem) {
   const position =
     item.mediaType === "tv" &&
     item.resume.seasonNumber !== null &&
-    item.resume.episodeNumber !== null
+    item.resume.seasonNumber > 0 &&
+    item.resume.episodeNumber !== null &&
+    item.resume.episodeNumber > 0
       ? `S${item.resume.seasonNumber} E${item.resume.episodeNumber}`
-      : "Film";
-  if (item.resume.progressSeconds <= 0) return `${position} · Episode suivant`;
+      : item.mediaType === "movie"
+        ? "Film"
+        : "Serie";
+  if (item.resume.progressSeconds <= 0) return `${position} · A commencer`;
   if (item.resume.durationSeconds <= 0) return `${position} · En cours`;
-  const percent = Math.round(
-    (item.resume.progressSeconds / item.resume.durationSeconds) * 100,
-  );
-  return `${position} · ${Math.min(99, percent)} %`;
+  const ratio = item.resume.progressSeconds / item.resume.durationSeconds;
+  if (ratio < 0.1) return `${position} · Commence`;
+  if (ratio < 0.9) return `${position} · En cours`;
+  return `${position} · Presque termine`;
+}
+
+function sectionBrowseHref(sectionId: string) {
+  const hrefs: Record<string, string> = {
+    watchlist: "/list",
+    "new-movies": "/browse?type=movie&sort=new",
+    "new-series": "/browse?type=tv&sort=new",
+    movies: "/browse?type=movie&sort=popular",
+    series: "/browse?type=tv&sort=popular",
+    anime: "/browse?type=tv&catalog=anime",
+    mood: "/browse?type=movie&genre=878",
+  };
+  return hrefs[sectionId] ?? null;
 }
 
 function uniqueItems(items: CatalogItem[]) {
@@ -885,6 +1239,40 @@ function uniqueItems(items: CatalogItem[]) {
     seen.add(key);
     return true;
   });
+}
+
+function dedupeSections(
+  sections: CatalogSection[],
+  hero: CatalogItem,
+) {
+  return sections
+    .map((section) => {
+      const heroKey = `${hero.mediaType}-${hero.id}`;
+      return {
+        ...section,
+        items: uniqueItems(section.items)
+          .filter(
+            (item) =>
+              section.id === "resume" ||
+              section.id === "watchlist" ||
+              `${item.mediaType}-${item.id}` !== heroKey,
+          )
+          .slice(0, 12),
+      };
+    })
+    .filter((section) => section.items.length > 0);
+}
+
+function getHomeSessionId(fallback?: string) {
+  if (typeof window === "undefined") return fallback ?? null;
+  const storageKey = "cineverse-home-session-v1";
+  const existing = window.sessionStorage.getItem(storageKey);
+  if (existing) return existing;
+  const sessionId =
+    window.crypto.randomUUID?.() ??
+    `home-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  window.sessionStorage.setItem(storageKey, sessionId);
+  return sessionId;
 }
 
 function sortItems(items: CatalogItem[], sort: string) {

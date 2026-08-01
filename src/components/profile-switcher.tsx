@@ -1,6 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import {
+  BarChart3,
+  Bookmark,
   Check,
   LoaderCircle,
   LockKeyhole,
@@ -143,6 +146,22 @@ export function ProfileSwitcher({ open, onOpenChange }: Props) {
           </div>
 
           <div className="mt-2 grid border-t border-white/10 pt-2">
+            <Link
+              href="/list"
+              onClick={() => onOpenChange(false)}
+              className="inline-flex h-10 items-center gap-3 rounded px-3 text-sm font-bold text-zinc-300 transition hover:bg-white/[0.06] hover:text-white"
+            >
+              <Bookmark className="h-4 w-4" />
+              Ma liste
+            </Link>
+            <Link
+              href="/stats"
+              onClick={() => onOpenChange(false)}
+              className="inline-flex h-10 items-center gap-3 rounded px-3 text-sm font-bold text-zinc-300 transition hover:bg-white/[0.06] hover:text-white"
+            >
+              <BarChart3 className="h-4 w-4" />
+              Mes statistiques
+            </Link>
             {profiles.length < MAX_PROFILES ? (
               <button
                 type="button"

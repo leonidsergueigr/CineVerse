@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getActiveProfileId } from "@/lib/active-profile";
-import { getLikes, setLike } from "@/lib/store";
+import { getLikes, recordViewingEvent, setLike } from "@/lib/store";
 import type { MediaType } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -26,6 +26,16 @@ export async function POST(request: NextRequest) {
     posterPath: body.posterPath ?? null,
     backdropPath: body.backdropPath ?? null,
     liked: Boolean(body.liked),
+  });
+  recordViewingEvent(profileId, {
+    eventType: "RATED",
+    tmdbId: Number(body.tmdbId),
+    mediaType: body.mediaType,
+    title: String(body.title ?? "Sans titre"),
+    posterPath: body.posterPath ?? null,
+    genreIds: Array.isArray(body.genreIds) ? body.genreIds.map(Number) : [],
+    timezoneOffsetMinutes: Number(body.timezoneOffsetMinutes) || 0,
+    metadata: { feedback: body.liked ? "like" : "like_removed" },
   });
 
   return NextResponse.json({ ok: true });

@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   Check,
   LockKeyhole,
+  MoreHorizontal,
   Pencil,
   Plus,
   ShieldCheck,
@@ -373,7 +374,7 @@ export function ProfileHub({
         {mode === "delete" && selectedProfile ? (
           <form
             onSubmit={confirmDelete}
-            className="mt-9 w-full max-w-md rounded border border-red-500/30 bg-[#111] p-6 text-left shadow-2xl"
+            className="mt-9 w-full max-w-md rounded border border-rose-400/30 bg-[#111] p-6 text-left shadow-2xl"
           >
             <p className="text-sm leading-6 text-zinc-300">
               L&apos;historique, les reprises, les likes, les dislikes et les
@@ -414,7 +415,7 @@ export function ProfileHub({
                     selectedProfile.id !== activeProfileId &&
                     pin.length !== PROFILE_PIN_LENGTH)
                 }
-                className="h-11 rounded bg-[#e50914] text-sm font-bold hover:bg-[#f6121d] disabled:opacity-50"
+                className="h-11 rounded bg-rose-500 text-sm font-bold hover:bg-rose-400 disabled:opacity-50"
               >
                 {busy ? "Suppression..." : "Supprimer"}
               </button>
@@ -445,7 +446,7 @@ function ProfileTile({
         <span className="relative block">
           <ProfileAvatar profile={profile} />
           {managing ? (
-            <span className="absolute inset-0 grid place-items-center rounded bg-black/55 text-white">
+            <span className="absolute inset-0 grid place-items-center rounded bg-black/55 text-white opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">
               <Pencil className="h-8 w-8" />
             </span>
           ) : null}
@@ -463,15 +464,25 @@ function ProfileTile({
         </span>
       </button>
       {managing ? (
-        <button
-          type="button"
-          onClick={onDelete}
-          aria-label={`Supprimer ${profile.name}`}
-          title={`Supprimer ${profile.name}`}
-          className="absolute right-2 top-2 z-10 grid h-9 w-9 place-items-center rounded bg-black/70 text-zinc-300 transition hover:bg-[#e50914] hover:text-white"
-        >
-          <Trash2 className="h-4 w-4" />
-        </button>
+        <details className="group/menu absolute right-2 top-2 z-20">
+          <summary
+            aria-label={`Actions pour ${profile.name}`}
+            title={`Actions pour ${profile.name}`}
+            className="grid h-9 w-9 cursor-pointer list-none place-items-center rounded bg-black/70 text-zinc-300 ring-1 ring-white/10 transition hover:bg-zinc-800 hover:text-white [&::-webkit-details-marker]:hidden"
+          >
+            <MoreHorizontal className="h-4 w-4" />
+          </summary>
+          <div className="absolute right-0 mt-2 min-w-36 rounded border border-white/10 bg-[#181818] p-1 shadow-2xl">
+            <button
+              type="button"
+              onClick={onDelete}
+              className="flex h-9 w-full items-center gap-2 rounded px-3 text-left text-xs font-bold text-rose-300 transition hover:bg-rose-400/10 hover:text-rose-200"
+            >
+              <Trash2 className="h-4 w-4" />
+              Supprimer
+            </button>
+          </div>
+        </details>
       ) : null}
     </div>
   );
@@ -528,6 +539,24 @@ function ProfileFields({
 }) {
   return (
     <>
+      <div className="mb-6 flex items-center gap-4 border-b border-white/10 pb-6">
+        <span
+          className="grid h-20 w-20 shrink-0 place-items-center rounded text-3xl font-black text-white ring-1 ring-white/15"
+          style={{ backgroundColor: color }}
+          aria-hidden="true"
+        >
+          {name.trim().charAt(0).toUpperCase() || "?"}
+        </span>
+        <div>
+          <p className="text-xs font-bold uppercase text-zinc-400">
+            Apercu du profil
+          </p>
+          <p className="mt-1 max-w-56 truncate text-sm font-bold text-white">
+            {name.trim() || "Nouveau profil"}
+          </p>
+        </div>
+      </div>
+
       <label htmlFor="profile-name" className="text-sm font-bold text-zinc-300">
         Nom
       </label>
@@ -538,7 +567,7 @@ function ProfileFields({
         autoFocus
         maxLength={24}
         placeholder="Nom du profil"
-        className="mt-2 h-11 w-full rounded border border-white/15 bg-[#202020] px-3 text-sm outline-none placeholder:text-zinc-600 focus:border-[#e50914]"
+        className="mt-2 h-11 w-full rounded border border-white/15 bg-[#202020] px-3 text-sm outline-none placeholder:text-zinc-600 focus:border-white/50"
       />
 
       <fieldset className="mt-5">
@@ -598,7 +627,7 @@ function ProfileFields({
             placeholder={
               hasExistingPin ? "Laisser vide pour conserver" : "4 chiffres"
             }
-            className="h-11 w-full rounded border border-white/15 bg-[#202020] pl-10 pr-3 text-sm outline-none placeholder:text-zinc-600 focus:border-[#e50914] disabled:opacity-40"
+            className="h-11 w-full rounded border border-white/15 bg-[#202020] pl-10 pr-3 text-sm outline-none placeholder:text-zinc-600 focus:border-white/50 disabled:opacity-40"
           />
         </div>
       </div>
@@ -640,14 +669,14 @@ function PinInput({
       autoFocus={autoFocus}
       onChange={(event) => onChange(event.target.value.replace(/\D/g, ""))}
       placeholder="4 chiffres"
-      className="mt-2 h-12 w-full rounded border border-white/15 bg-[#202020] px-4 text-center font-mono text-xl outline-none placeholder:text-sm placeholder:text-zinc-600 focus:border-[#e50914]"
+      className="mt-2 h-12 w-full rounded border border-white/15 bg-[#202020] px-4 text-center font-mono text-xl outline-none placeholder:text-sm placeholder:text-zinc-600 focus:border-white/50"
     />
   );
 }
 
 function FormError({ error }: { error: string }) {
   return error ? (
-    <p role="alert" className="mt-4 text-sm text-red-400">
+    <p role="alert" className="mt-4 text-sm text-rose-300">
       {error}
     </p>
   ) : null;

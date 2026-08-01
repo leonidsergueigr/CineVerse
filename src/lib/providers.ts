@@ -125,6 +125,19 @@ function normalizeEmbedProvider(value: unknown): EmbedProvider | null {
         ),
       )
     : undefined;
+  const templateOrigin = originFromTemplate(value.template.trim());
+  const configuredMessageOrigins = Array.isArray(value.messageOrigins)
+    ? value.messageOrigins.flatMap((origin) => {
+        const normalized = normalizeOrigin(origin);
+        return normalized ? [normalized] : [];
+      })
+    : [];
+  const messageOrigins = Array.from(
+    new Set([
+      ...configuredMessageOrigins,
+      ...(templateOrigin ? [templateOrigin] : []),
+    ]),
+  );
 
   return {
     id: value.id.trim(),
@@ -135,7 +148,15 @@ function normalizeEmbedProvider(value: unknown): EmbedProvider | null {
       value.availabilityApi.trim()
         ? value.availabilityApi.trim()
         : undefined,
-    supportsTracking: value.supportsTracking === true,
+    messageOrigins: messageOrigins.length ? messageOrigins : undefined,
+    supportsTracking:
+      value.supportsTracking === true ||
+      (templateOrigin ? isKnownTrackingOrigin(templateOrigin) : false),
+    trackingCapabilities: normalizeTrackingCapabilities(
+      value.trackingCapabilities,
+      value.supportsTracking === true ||
+        (templateOrigin ? isKnownTrackingOrigin(templateOrigin) : false),
+    ),
     supportsLanguage: value.supportsLanguage !== false,
     priority:
       typeof value.priority === "number" && Number.isFinite(value.priority)
@@ -147,6 +168,56 @@ function normalizeEmbedProvider(value: unknown): EmbedProvider | null {
         ? customizationOptions
         : undefined,
   };
+}
+
+function normalizeTrackingCapabilities(value: unknown, fallback: boolean) {
+  if (!isRecord(value)) {
+    return fallback
+      ? { progress: true, playState: true, endedEvent: true, postMessage: true }
+      : { progress: false, playState: false, endedEvent: false, postMessage: false };
+  }
+  return {
+    progress: value.progress === true,
+    playState: value.playState === true,
+    endedEvent: value.endedEvent === true,
+    postMessage: value.postMessage === true,
+  };
+}
+
+function originFromTemplate(template: string) {
+  if (!template.startsWith("https://")) return null;
+  try {
+    const url = new URL(template.replace(/\{[^}]+\}/g, "placeholder"));
+    return url.username || url.password || (url.port && url.port !== "443")
+      ? null
+      : url.origin;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeOrigin(value: unknown) {
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
+      (!url.port || url.port === "443")
+      ? url.origin
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function isKnownTrackingOrigin(origin: string) {
+  try {
+    const hostname = new URL(origin).hostname.toLowerCase();
+    return hostname === "vidzy.org" || hostname.endsWith(".vidzy.org");
+  } catch {
+    return false;
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -161,6 +232,12 @@ function demoProviders(): EmbedProvider[] {
       template:
         "/api/demo-player?tmdbId={tmdbId}&mediaType={tmdbMediaType}&title={title}&language={language}&season={season}&episode={episode}",
       supportsTracking: true,
+      trackingCapabilities: {
+        progress: true,
+        playState: true,
+        endedEvent: true,
+        postMessage: true,
+      },
       supportsLanguage: true,
       priority: 1,
     },

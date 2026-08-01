@@ -3,6 +3,8 @@
 :root {
   --background: #050505;
   --foreground: #f7f7f7;
+  --font-geist-sans: Arial, Helvetica, sans-serif;
+  --font-geist-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
 @theme inline {
@@ -15,7 +17,7 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans);
 }
 
 button,
@@ -77,4 +79,128 @@ select option {
 .control-field option {
   background: #151515;
   color: #f5f5f5;
+}
+
+.hero-backdrop-enter {
+  animation: hero-backdrop-enter 500ms ease-out both;
+}
+
+.hero-backdrop-exit {
+  animation: hero-backdrop-exit 650ms ease-out both;
+}
+
+.catalog-row-reveal {
+  opacity: 0;
+  transform: translateY(18px);
+  transition:
+    opacity 360ms ease,
+    transform 360ms ease;
+}
+
+.catalog-row-reveal.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.catalog-row-reveal .row-card {
+  opacity: 0;
+  transform: translateY(12px);
+}
+
+.catalog-row-reveal.is-visible .row-card {
+  animation: row-card-enter 320ms ease-out var(--card-delay, 0ms) both;
+}
+
+.poster-shimmer::before {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  content: "";
+  background: linear-gradient(
+    100deg,
+    transparent 20%,
+    rgba(255, 255, 255, 0.09) 48%,
+    transparent 76%
+  );
+  transform: translateX(-110%);
+  animation: poster-shimmer 1.2s ease-in-out infinite;
+}
+
+.like-pop {
+  animation: like-pop 300ms ease-out;
+}
+
+.progress-fill {
+  transform-origin: left center;
+  animation: progress-fill 700ms ease-out both;
+}
+
+@keyframes hero-backdrop-enter {
+  from {
+    opacity: 0.35;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes hero-backdrop-exit {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes row-card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes poster-shimmer {
+  to {
+    transform: translateX(110%);
+  }
+}
+
+@keyframes like-pop {
+  50% {
+    transform: scale(1.3);
+  }
+}
+
+@keyframes progress-fill {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-backdrop-enter,
+  .hero-backdrop-exit,
+  .catalog-row-reveal,
+  .catalog-row-reveal .row-card,
+  .catalog-row-reveal.is-visible .row-card,
+  .poster-shimmer::before,
+  .like-pop,
+  .progress-fill {
+    animation: none;
+    transition: none;
+  }
+
+  .catalog-row-reveal,
+  .catalog-row-reveal .row-card {
+    opacity: 1;
+    transform: none;
+  }
 }

@@ -15,6 +15,7 @@ import type {
   HomeCatalog,
   MediaDetails,
   MediaType,
+  SeasonEpisode,
   SearchSuggestion,
 } from "@/lib/types";
 
@@ -106,6 +107,17 @@ type TmdbDetails = TmdbResult & {
 type TmdbEpisodeDetails = {
   name?: string;
   runtime?: number | null;
+};
+
+type TmdbSeasonDetails = {
+  episodes?: Array<{
+    episode_number?: number;
+    name?: string;
+    overview?: string;
+    runtime?: number | null;
+    still_path?: string | null;
+    air_date?: string | null;
+  }>;
 };
 
 type SourceCatalogItem = {
@@ -571,6 +583,33 @@ export async function getEpisodeInfo(
         ? data.runtime
         : null,
   };
+}
+
+export async function getSeasonEpisodes(
+  tvId: number,
+  seasonNumber: number,
+): Promise<SeasonEpisode[]> {
+  const data = await tmdb<TmdbSeasonDetails>(
+    `/tv/${tvId}/season/${seasonNumber}`,
+    {},
+  );
+
+  return (data?.episodes ?? [])
+    .map((episode, index) => {
+      const episodeNumber = episode.episode_number ?? index + 1;
+      return {
+        episodeNumber,
+        name: episode.name ?? `Episode ${episodeNumber}`,
+        overview: episode.overview ?? "",
+        runtime:
+          typeof episode.runtime === "number" && episode.runtime > 0
+            ? episode.runtime
+            : null,
+        stillUrl: posterUrl(episode.still_path ?? null, "w300"),
+        airDate: episode.air_date ?? null,
+      };
+    })
+    .filter((episode) => episode.episodeNumber > 0);
 }
 
 export async function getTasteCandidates(mediaType: MediaType, id: number) {

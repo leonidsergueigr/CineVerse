@@ -49,12 +49,16 @@ export type CatalogSection = {
   id: string;
   title: string;
   items: CatalogItem[];
+  reason?: string;
+  personalized?: boolean;
 };
 
 export type HomeCatalog = {
   hero: CatalogItem;
   heroCandidates: CatalogItem[];
   heroTrailerUrl: string | null;
+  heroReasons?: Record<string, string>;
+  programmingSessionId?: string;
   sections: CatalogSection[];
 };
 
@@ -95,6 +99,11 @@ export type WatchProgress = {
   progressSeconds: number;
   durationSeconds: number;
   completed: boolean;
+  completionSource: import("@/lib/watch-tracking").CompletionSource;
+  trackingConfidence: import("@/lib/watch-tracking").TrackingConfidence;
+  manuallyMarkedAt: string | null;
+  estimatedWatchSeconds: number;
+  providerWatchSeconds: number;
   seriesEpisodeCounts: Array<{
     seasonNumber: number;
     episodeCount: number;
@@ -105,6 +114,13 @@ export type WatchProgress = {
 export type EpisodeInfo = {
   name: string;
   runtime: number | null;
+};
+
+export type SeasonEpisode = EpisodeInfo & {
+  episodeNumber: number;
+  overview: string;
+  stillUrl: string | null;
+  airDate: string | null;
 };
 
 export type SeriesProgressSummary = {
@@ -130,6 +146,18 @@ export type LikeRecord = {
   posterPath: string | null;
   backdropPath: string | null;
   likedAt: string;
+  signalStrength?: number;
+  signalOrigin?: "liked" | "completed";
+  completionSource?: import("@/lib/watch-tracking").CompletionSource;
+};
+
+export type WatchlistRecord = {
+  tmdbId: number;
+  mediaType: MediaType;
+  title: string;
+  posterPath: string | null;
+  backdropPath: string | null;
+  addedAt: string;
 };
 
 export type DislikeRecord = {
@@ -143,6 +171,136 @@ export type DislikeRecord = {
   dislikedAt: string;
 };
 
+export type ViewingEventType =
+  | "VIEW_DETAILS"
+  | "PLAY_STARTED"
+  | "PROGRESS_UPDATED"
+  | "PAUSED"
+  | "COMPLETED"
+  | "ABANDONED"
+  | "WATCHLIST_ADDED"
+  | "RATED"
+  | "RECOMMENDATION_CLICKED"
+  | "SEARCHED"
+  | "FILTER_APPLIED";
+
+export type ProfileStats = {
+  profile: Profile;
+  generatedAt: string;
+  tracking: {
+    measuredSessions: number;
+    untrackedStarts: number;
+    isPartial: boolean;
+    confirmedWatchSeconds: number;
+    estimatedWatchSeconds: number;
+    manualCompletions: number;
+    automaticCompletions: number;
+  };
+  overview: {
+    totalWatchSeconds: number;
+    monthWatchSeconds: number;
+    weekWatchSeconds: number;
+    completedMovies: number;
+    startedSeries: number;
+    completedEpisodes: number;
+    completedTitles: number;
+    averageCompletionPercent: number;
+  };
+  habits: {
+    topDay: string | null;
+    usualTimeWindow: string | null;
+    averageSessionSeconds: number;
+    activeDays: number;
+    longestStreakDays: number;
+    moviePercent: number;
+    seriesPercent: number;
+    weekdayPercent: number;
+    weekendPercent: number;
+  };
+  tastes: {
+    genres: Array<{ id: number; name: string; percent: number }>;
+    providers: Array<{ name: string; percent: number }>;
+    audioLanguages: Array<{ name: string; percent: number }>;
+  };
+  progress: {
+    likelyAbandoned: Array<{
+      tmdbId: number;
+      mediaType: MediaType;
+      title: string;
+      posterPath: string | null;
+      percent: number;
+      updatedAt: string;
+    }>;
+    series: Array<{
+      tmdbId: number;
+      title: string;
+      posterPath: string | null;
+      completedEpisodes: number;
+      totalEpisodes: number;
+      completedSeasons: number;
+      remainingEpisodes: number;
+      remainingSeconds: number;
+      percent: number;
+    }>;
+  };
+  recap: {
+    label: string;
+    watchSeconds: number;
+    completedCount: number;
+    topTitle: string | null;
+    topGenre: string | null;
+    comparedToPreviousPercent: number | null;
+  };
+  intelligence: {
+    cinemaProfile: {
+      title: string;
+      summary: string;
+      confidence: "emerging" | "established";
+      traits: string[];
+      suggestedMinutes: number | null;
+    };
+    discovery: {
+      recommendationPercent: number | null;
+      newGenresThisMonth: number;
+      playedTitles: number;
+      sources: Array<{
+        id: "recommendation" | "search" | "filter" | "direct";
+        label: string;
+        count: number;
+        percent: number;
+      }>;
+    };
+    seriesLoyalty: {
+      completionRate: number | null;
+      mostRegularTitle: string | null;
+      averageGapDays: number | null;
+      longestPauseDays: number | null;
+      longestPauseTitle: string | null;
+      abandonedSeries: number;
+      resumedSeries: number;
+    };
+    selection: {
+      averageDetailsBeforePlay: number | null;
+      averageDecisionSeconds: number | null;
+      recommendationConversionPercent: number | null;
+      searches: number;
+      topFilters: Array<{ label: string; count: number }>;
+    };
+    regularity: {
+      calendar: Array<{
+        date: string;
+        intensity: number;
+        watchSeconds: number;
+      }>;
+      consecutiveWeeks: number;
+      longestBreakDays: number;
+      longestSessionSeconds: number;
+      busiestDay: { date: string; watchSeconds: number } | null;
+      busiestMonth: { label: string; watchSeconds: number } | null;
+    };
+  };
+};
+
 export type PersonalizedRecommendation = CatalogItem & {
   reason: string;
   score: number;
@@ -153,6 +311,7 @@ export type RecommendationResult = {
   strategy: "personalized" | "empty";
   profile: {
     likeCount: number;
+    watchlistCount: number;
     dislikeCount: number;
     movieCount: number;
     seriesCount: number;
@@ -160,14 +319,41 @@ export type RecommendationResult = {
   };
 };
 
+export type RecommendationExposure = {
+  tmdbId: number;
+  mediaType: MediaType;
+  shownCount: number;
+  clickedCount: number;
+  playedCount: number;
+  completedCount: number;
+  dismissedCount: number;
+  ignoredCount: number;
+  lastShownAt: number;
+};
+
+export type RecommendationImpression = {
+  tmdbId: number;
+  mediaType: MediaType;
+  shelfType: string;
+  position: number;
+  score?: number;
+};
+
 export type EmbedProvider = {
   id: string;
   name: string;
   template: string;
   availabilityApi?: string;
+  messageOrigins?: string[];
   supportsTracking: boolean;
   supportsLanguage: boolean;
+  trackingCapabilities?: import("@/lib/watch-tracking").ProviderTrackingCapabilities;
   priority: number;
+  quality?: number | null;
+  reliability?: {
+    score: number;
+    lastCheckedAt: string | null;
+  };
   languages?: Array<{ id: string; label: string }>;
   customizationOptions?: {
     autoplay?: string;

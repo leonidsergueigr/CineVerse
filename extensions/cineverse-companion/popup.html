@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CineVerse Companion</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <span class="brand-mark">C</span>
+      <div>
+        <strong>CineVerse Companion</strong>
+        <p id="version">Suivi du lecteur</p>
+      </div>
+    </header>
+
+    <main>
+      <section class="status-row" aria-live="polite">
+        <span id="status-dot" class="status-dot idle"></span>
+        <div>
+          <strong id="state">Recherche du lecteur</strong>
+          <p id="provider">Ouvrez une video dans CineVerse</p>
+        </div>
+      </section>
+
+      <section id="details" class="details" hidden>
+        <div class="progress-track" aria-hidden="true">
+          <span id="progress-fill"></span>
+        </div>
+        <div class="time-row">
+          <strong id="position">00:00</strong>
+          <span id="duration">00:00</span>
+        </div>
+        <dl>
+          <div>
+            <dt>Temps lu</dt>
+            <dd id="watched">00:00</dd>
+          </div>
+          <div>
+            <dt>Vitesse</dt>
+            <dd id="rate">1x</dd>
+          </div>
+          <div>
+            <dt>Signal</dt>
+            <dd id="signal-age">maintenant</dd>
+          </div>
+          <div>
+            <dt>Evenement</dt>
+            <dd id="event-name">-</dd>
+          </div>
+        </dl>
+      </section>
+
+      <p class="footnote">
+        Les pauses, le buffering et les sauts ne sont pas comptes. La lecture
+        peut rester suivie lorsque cet onglet passe en arriere-plan.
+      </p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

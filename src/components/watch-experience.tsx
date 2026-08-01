@@ -5,19 +5,32 @@ import {
   ArrowLeft,
   Check,
   Heart,
+  Info,
   Languages,
+  ListPlus,
   Play,
   SkipForward,
   Star,
   ThumbsDown,
+  X,
+  ZoomIn,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { buildEmbedUrl, getProviderLanguages } from "@/lib/providers";
+import {
+  createProviderTrackingAdapter,
+  isCineVerseCompanionMessage,
+  isCineVerseCompanionReadyMessage,
+  parseCineVerseCompanionMessage,
+} from "@/lib/provider-tracking";
+import { useWatchSessionTracker } from "@/hooks/use-watch-session-tracker";
+import { TRACKING_CONFIG } from "@/lib/watch-tracking";
 import { SiteHeader } from "@/components/site-header";
 import type {
   EmbedProvider,
   EpisodeInfo,
   MediaDetails,
+  SeasonEpisode,
   SeriesProgressSummary,
   WatchProgress,
 } from "@/lib/types";
@@ -28,9 +41,11 @@ type Props = {
   initialProgress: WatchProgress | null;
   initialLiked: boolean;
   initialDisliked: boolean;
+  initialWatchlisted: boolean;
   initialSeason: number | null;
   initialEpisode: number | null;
   initialEpisodeInfo: EpisodeInfo | null;
+  initialSeasonEpisodes: SeasonEpisode[];
   initialSeriesProgress: SeriesProgressSummary | null;
 };
 
@@ -40,9 +55,11 @@ export function WatchExperience({
   initialProgress,
   initialLiked,
   initialDisliked,
+  initialWatchlisted,
   initialSeason,
   initialEpisode,
   initialEpisodeInfo,
+  initialSeasonEpisodes,
   initialSeriesProgress,
 }: Props) {
   const availableSeasons = useMemo(
@@ -68,20 +85,40 @@ export function WatchExperience({
   const [completed, setCompleted] = useState(initialProgress?.completed ?? false);
   const [liked, setLiked] = useState(initialLiked);
   const [disliked, setDisliked] = useState(initialDisliked);
+  const [watchlisted, setWatchlisted] = useState(initialWatchlisted);
   const [autoNext, setAutoNext] = useState(true);
-  const [playerLoadToken, setPlayerLoadToken] = useState(0);
+  const [autoNextCountdown, setAutoNextCountdown] = useState<number | null>(
+    null,
+  );
+  const [overviewExpanded, setOverviewExpanded] = useState(false);
+  const [posterExpanded, setPosterExpanded] = useState(false);
+  const [trackingAvailable, setTrackingAvailable] = useState(false);
+  const [companionAvailable, setCompanionAvailable] = useState(false);
+  const [companionTrackingActive, setCompanionTrackingActive] = useState(false);
   const [progress, setProgress] = useState({
     currentTime: initialProgress?.progressSeconds ?? 0,
     duration: initialProgress?.durationSeconds ?? 0,
   });
+  const [resumeStartSeconds, setResumeStartSeconds] = useState(
+    initialProgress?.completed ? 0 : initialProgress?.progressSeconds ?? 0,
+  );
   const [episodeInfo, setEpisodeInfo] = useState(initialEpisodeInfo);
+  const [seasonEpisodes, setSeasonEpisodes] = useState(initialSeasonEpisodes);
   const [seriesProgress, setSeriesProgress] = useState(initialSeriesProgress);
   const [, startTransition] = useTransition();
-  const lastSaveRef = useRef(0);
   const autoAdvancedRef = useRef("");
   const playerFrameRef = useRef<HTMLIFrameElement>(null);
   const fallbackProgressRef = useRef(initialProgress?.progressSeconds ?? 0);
+  const latestDurationRef = useRef(initialProgress?.durationSeconds ?? 0);
   const trackingDetectedRef = useRef(false);
+  const companionTrackingRef = useRef(false);
+  const lastProgressPaintAtRef = useRef(0);
+  const autoNextTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const resumeTargetRef = useRef(
+    initialProgress?.completed ? 0 : initialProgress?.progressSeconds ?? 0,
+  );
+  const resumeAttemptsRef = useRef(0);
+  const resumeAppliedRef = useRef(false);
 
   const provider = providers.find((item) => item.id === providerId) ?? providers[0];
   const languageOptions = useMemo(() => getProviderLanguages(provider), [provider]);
@@ -96,12 +133,12 @@ export function WatchExperience({
     { length: selectedSeason?.episodeCount ?? 1 },
     (_, index) => index + 1,
   );
-  const activeRuntime =
-    detail.mediaType === "movie" ? detail.runtime : episodeInfo?.runtime ?? null;
-  const estimatedDurationSeconds = Math.max(
-    60,
-    (activeRuntime ?? (detail.mediaType === "movie" ? 110 : 45)) * 60,
-  );
+  const activeRuntime = detail.mediaType === "movie"
+    ? detail.runtime
+    : episodeInfo?.runtime ?? detail.runtime ?? null;
+  const officialDurationSeconds = activeRuntime
+    ? Math.max(60, activeRuntime * 60)
+    : null;
   const seriesEpisodeCounts = useMemo(
     () =>
       availableSeasons.map((item) => ({
@@ -120,42 +157,17 @@ export function WatchExperience({
       autoNext,
     });
   }, [activeLanguage, autoNext, detail, episode, provider, season, started]);
-
-  useEffect(() => {
-    document.title =
-      detail.mediaType === "tv"
-        ? `${detail.title} - S${season} E${episode} | CineVerse`
-        : `${detail.title} | CineVerse`;
-  }, [detail.mediaType, detail.title, episode, season]);
-
-  const savePlaybackProgress = useCallback(
-    (
-      currentTime: number,
-      duration: number,
-      playbackCompleted = false,
-    ) => {
-      void fetch("/api/progress", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          tmdbId: detail.id,
-          mediaType: detail.mediaType,
-          seasonNumber: detail.mediaType === "tv" ? season : null,
-          episodeNumber: detail.mediaType === "tv" ? episode : null,
-          title: detail.title,
-          posterPath: detail.posterPath,
-          backdropPath: detail.backdropPath,
-          progressSeconds: Math.max(0, currentTime),
-          durationSeconds: Math.max(0, duration),
-          completed: playbackCompleted,
-          seriesEpisodeCounts:
-            detail.mediaType === "tv" ? seriesEpisodeCounts : [],
-        }),
-      });
-    },
-    [detail, episode, season, seriesEpisodeCounts],
+  const playerSrc = useMemo(
+    () =>
+      started
+        ? appendResumeFragment(iframeUrl, resumeStartSeconds)
+        : iframeUrl,
+    [iframeUrl, resumeStartSeconds, started],
   );
-
+  const trustedMessageOrigins = useMemo(
+    () => new Set(provider?.messageOrigins ?? []),
+    [provider?.messageOrigins],
+  );
   const completeCurrentEpisode = useCallback(() => {
     if (detail.mediaType !== "tv") return;
     setSeriesProgress((current) => {
@@ -178,10 +190,122 @@ export function WatchExperience({
     });
   }, [detail.mediaType, episode, season]);
 
-  const advanceEpisode = useCallback(() => {
-    if (!autoNext || detail.mediaType !== "tv") return false;
+  const uncompleteCurrentEpisode = useCallback(() => {
+    if (detail.mediaType !== "tv") return;
+    setSeriesProgress((current) => {
+      if (
+        !current ||
+        current.seasonNumber !== season ||
+        !current.completedEpisodeNumbers.includes(episode)
+      ) {
+        return current;
+      }
+      return {
+        ...current,
+        completedEpisodes: Math.max(0, current.completedEpisodes - 1),
+        completedEpisodeNumbers: current.completedEpisodeNumbers.filter(
+          (item) => item !== episode,
+        ),
+      };
+    });
+  }, [detail.mediaType, episode, season]);
+  const providerTrackingAdapter = useMemo(
+    () => createProviderTrackingAdapter(provider),
+    [provider],
+  );
+  const trackingIdentity = useMemo(
+    () => ({
+      tmdbId: detail.id,
+      mediaType: detail.mediaType,
+      seasonNumber: detail.mediaType === "tv" ? season : null,
+      episodeNumber: detail.mediaType === "tv" ? episode : null,
+      title: detail.title,
+      posterPath: detail.posterPath,
+      backdropPath: detail.backdropPath,
+      providerId: provider?.name ?? provider?.id ?? "",
+      audioLanguage: activeLanguage,
+      officialRuntimeSeconds: officialDurationSeconds,
+      genreIds: detail.genreIds,
+      timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+      seriesEpisodeCounts:
+        detail.mediaType === "tv" ? seriesEpisodeCounts : [],
+    }),
+    [
+      activeLanguage,
+      detail,
+      episode,
+      officialDurationSeconds,
+      provider?.id,
+      provider?.name,
+      season,
+      seriesEpisodeCounts,
+    ],
+  );
+  const {
+    snapshot: trackingSnapshot,
+    reportProviderSignal,
+    markWatched,
+    unmarkWatched,
+  } = useWatchSessionTracker({
+    active: started,
+    playbackKey: `${providerId}:${activeLanguage}:${season}:${episode}`,
+    identity: trackingIdentity,
+    onSnapshot: (next) => {
+      if (next.progressSeconds > 0) {
+        fallbackProgressRef.current = next.progressSeconds;
+        latestDurationRef.current = next.durationSeconds;
+        setProgress({
+          currentTime: next.progressSeconds,
+          duration: next.durationSeconds,
+        });
+      }
+      setCompleted(next.completed);
+      if (next.completed) completeCurrentEpisode();
+    },
+  });
+
+  useEffect(() => {
+    document.title =
+      detail.mediaType === "tv"
+        ? `${detail.title} - S${season} E${episode} | CineVerse`
+        : `${detail.title} | CineVerse`;
+  }, [detail.mediaType, detail.title, episode, season]);
+
+  useEffect(() => {
+    void fetch("/api/events", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        eventType: "VIEW_DETAILS",
+        tmdbId: detail.id,
+        mediaType: detail.mediaType,
+        title: detail.title,
+        posterPath: detail.posterPath,
+        seasonNumber: detail.mediaType === "tv" ? season : null,
+        episodeNumber: detail.mediaType === "tv" ? episode : null,
+        genreIds: detail.genreIds,
+        timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+      }),
+    });
+  }, [
+    detail.genreIds,
+    detail.id,
+    detail.mediaType,
+    detail.posterPath,
+    detail.title,
+    episode,
+    season,
+  ]);
+
+  const advanceEpisode = useCallback((force = false) => {
+    if ((!force && !autoNext) || detail.mediaType !== "tv") return false;
     const key = `${season}-${episode}`;
     if (autoAdvancedRef.current === key) return false;
+    if (autoNextTimerRef.current) {
+      clearInterval(autoNextTimerRef.current);
+      autoNextTimerRef.current = null;
+    }
+    setAutoNextCountdown(null);
 
     const currentSeason = availableSeasons.find(
       (item) => item.seasonNumber === season,
@@ -191,9 +315,18 @@ export function WatchExperience({
       autoAdvancedRef.current = key;
       setEpisode(nextEpisode);
       setProgress({ currentTime: 0, duration: 0 });
+      setResumeStartSeconds(0);
+      latestDurationRef.current = 0;
       setCompleted(false);
       fallbackProgressRef.current = 0;
+      resumeTargetRef.current = 0;
+      resumeAttemptsRef.current = 0;
+      resumeAppliedRef.current = false;
       trackingDetectedRef.current = false;
+      companionTrackingRef.current = false;
+      lastProgressPaintAtRef.current = 0;
+      setTrackingAvailable(false);
+      setCompanionTrackingActive(false);
       replaceEpisodeUrl(season, nextEpisode);
       return true;
     }
@@ -206,150 +339,255 @@ export function WatchExperience({
       setSeason(nextSeason.seasonNumber);
       setEpisode(1);
       setProgress({ currentTime: 0, duration: 0 });
+      setResumeStartSeconds(0);
+      latestDurationRef.current = 0;
       setCompleted(false);
       fallbackProgressRef.current = 0;
+      resumeTargetRef.current = 0;
+      resumeAttemptsRef.current = 0;
+      resumeAppliedRef.current = false;
       trackingDetectedRef.current = false;
+      companionTrackingRef.current = false;
+      lastProgressPaintAtRef.current = 0;
+      setTrackingAvailable(false);
+      setCompanionTrackingActive(false);
       replaceEpisodeUrl(nextSeason.seasonNumber, 1);
       return true;
     }
     return false;
   }, [autoNext, availableSeasons, detail.mediaType, episode, season]);
 
-  const maybeAutoAdvance = useCallback(
-    (currentTime: number, duration: number) => {
-      if (duration <= 0 || currentTime / duration < 0.98) return;
-      advanceEpisode();
+  const cancelScheduledAutoNext = useCallback(() => {
+    if (autoNextTimerRef.current) {
+      clearInterval(autoNextTimerRef.current);
+      autoNextTimerRef.current = null;
+    }
+    setAutoNextCountdown(null);
+  }, []);
+
+  const scheduleAutoAdvance = useCallback(() => {
+    if (
+      detail.mediaType !== "tv" ||
+      !autoNext ||
+      autoNextTimerRef.current
+    ) {
+      return;
+    }
+
+    let remaining = 5;
+    setAutoNextCountdown(remaining);
+    autoNextTimerRef.current = setInterval(() => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        if (autoNextTimerRef.current) {
+          clearInterval(autoNextTimerRef.current);
+          autoNextTimerRef.current = null;
+        }
+        setAutoNextCountdown(null);
+        advanceEpisode();
+        return;
+      }
+      setAutoNextCountdown(remaining);
+    }, 1000);
+  }, [advanceEpisode, autoNext, detail.mediaType]);
+
+  const requestPlayerState = useCallback(() => {
+    if (companionTrackingRef.current) return;
+    const playerWindow = playerFrameRef.current?.contentWindow;
+    if (!playerWindow) return;
+    playerWindow.postMessage({ action: "getCurrentTime" }, "*");
+  }, []);
+
+  const seekPlayerToResume = useCallback(() => {
+    const target = resumeTargetRef.current;
+    const playerWindow = playerFrameRef.current?.contentWindow;
+    if (
+      !playerWindow ||
+      target <= 30 ||
+      resumeAppliedRef.current ||
+      resumeAttemptsRef.current >= 5
+    ) {
+      return;
+    }
+
+    resumeAttemptsRef.current += 1;
+    playerWindow.postMessage({ action: "seek", value: target }, "*");
+    playerWindow.postMessage({ action: "seek", time: target }, "*");
+    playerWindow.postMessage(
+      { action: "setCurrentTime", value: target },
+      "*",
+    );
+  }, []);
+
+  useEffect(() => {
+    if (!started) return;
+    requestPlayerState();
+    const poller = window.setInterval(requestPlayerState, 2000);
+    return () => window.clearInterval(poller);
+  }, [playerSrc, requestPlayerState, started]);
+
+  useEffect(
+    () => () => {
+      if (autoNextTimerRef.current) {
+        clearInterval(autoNextTimerRef.current);
+      }
     },
-    [advanceEpisode],
+    [],
   );
 
   useEffect(() => {
     function onMessage(event: MessageEvent) {
-      if (event.source !== playerFrameRef.current?.contentWindow) return;
+      const companionMessage =
+        event.source === window &&
+        event.origin === window.location.origin &&
+        isCineVerseCompanionMessage(event.data);
+      if (companionMessage && isCineVerseCompanionReadyMessage(event.data)) {
+        setCompanionAvailable(true);
+        return;
+      }
+      const directPlayerMessage =
+        event.source === playerFrameRef.current?.contentWindow;
+      const trustedNestedPlayerMessage =
+        event.origin !== "null" && trustedMessageOrigins.has(event.origin);
+      if (
+        !companionMessage &&
+        !directPlayerMessage &&
+        !trustedNestedPlayerMessage
+      ) {
+        return;
+      }
       const data =
         typeof event.data === "string"
           ? parseJson(event.data) ?? event.data
           : event.data;
-      const playbackEvent = normalizePlaybackEvent(data);
-      if (!playbackEvent) return;
-      trackingDetectedRef.current = true;
-
-      if (playbackEvent.ended) {
-        const duration = Math.max(
-          playbackEvent.duration,
-          progress.duration,
-          playbackEvent.currentTime,
-        );
-        setCompleted(true);
-        setProgress({
-          currentTime: duration || playbackEvent.currentTime,
-          duration,
-        });
-        savePlaybackProgress(
-          duration || playbackEvent.currentTime,
-          duration,
-          true,
-        );
-        completeCurrentEpisode();
-        advanceEpisode();
-        return;
+      if (!companionMessage && providerTrackingAdapter.isReadyMessage(data)) {
+        requestPlayerState();
+        seekPlayerToResume();
       }
+      if (!companionMessage && companionTrackingRef.current) return;
+      const playbackEvent = companionMessage
+        ? parseCineVerseCompanionMessage(data, officialDurationSeconds)
+        : providerTrackingAdapter.parseMessage(data);
+      if (!playbackEvent) return;
+      if (playbackEvent.trackingMethod === "browser-extension") {
+        companionTrackingRef.current = true;
+        setCompanionAvailable(true);
+        setCompanionTrackingActive(true);
+      }
+      trackingDetectedRef.current = true;
+      setTrackingAvailable(true);
+
+      const remainingSeconds = Math.max(
+        0,
+        playbackEvent.duration - playbackEvent.currentTime,
+      );
+      const reachedCredits =
+        playbackEvent.trackingMethod === "browser-extension" &&
+        playbackEvent.playbackState === "playing" &&
+        !playbackEvent.seeking &&
+        playbackEvent.duration > 0 &&
+        playbackEvent.progressPercent !== null &&
+        playbackEvent.progressPercent >=
+          TRACKING_CONFIG.automaticCompletionThreshold &&
+        remainingSeconds <= TRACKING_CONFIG.autoNextMaximumRemainingSeconds;
+      const trackingSignal = reachedCredits
+        ? { ...playbackEvent, creditsReached: true }
+        : playbackEvent;
+      void reportProviderSignal(trackingSignal).catch(() => undefined);
 
       const currentTime = playbackEvent.currentTime;
       const duration = playbackEvent.duration;
       if (!Number.isFinite(currentTime) || !Number.isFinite(duration)) return;
-
       fallbackProgressRef.current = currentTime;
-      setProgress({ currentTime, duration });
-      const nearEnd = isNearPlaybackEnd(
-        detail.mediaType,
-        currentTime,
-        duration,
-      );
-      if (nearEnd) {
-        setCompleted(true);
-        completeCurrentEpisode();
-      }
-      maybeAutoAdvance(currentTime, duration);
+      latestDurationRef.current = duration;
       const now = Date.now();
-      if (now - lastSaveRef.current < 9000) return;
-      lastSaveRef.current = now;
+      const shouldPaintProgress =
+        playbackEvent.ended ||
+        reachedCredits ||
+        playbackEvent.playbackState === "paused" ||
+        now - lastProgressPaintAtRef.current >= 5_000;
+      if (shouldPaintProgress) {
+        lastProgressPaintAtRef.current = now;
+        setProgress({ currentTime, duration });
+      }
 
-      savePlaybackProgress(currentTime, duration, nearEnd);
+      if (playbackEvent.playbackState === "paused" && !playbackEvent.ended) return;
+
+      if (playbackEvent.ended || reachedCredits) {
+        const duration = firstPositiveNumber(
+          playbackEvent.duration,
+          latestDurationRef.current,
+          officialDurationSeconds ?? 0,
+        );
+        const finalPosition = firstPositiveNumber(
+          playbackEvent.currentTime,
+          duration,
+        );
+        setCompleted(true);
+        setProgress({
+          currentTime: finalPosition,
+          duration,
+        });
+        fallbackProgressRef.current = finalPosition;
+        latestDurationRef.current = duration;
+        completeCurrentEpisode();
+        scheduleAutoAdvance();
+        return;
+      }
+
+      const resumeTarget = resumeTargetRef.current;
+      if (
+        resumeTarget > 30 &&
+        !resumeAppliedRef.current &&
+        currentTime < resumeTarget - 8
+      ) {
+        seekPlayerToResume();
+        return;
+      }
+      if (
+        resumeTarget > 30 &&
+        (Math.abs(currentTime - resumeTarget) <= 8 ||
+          currentTime >= resumeTarget - 3)
+      ) {
+        resumeAppliedRef.current = true;
+        resumeTargetRef.current = 0;
+      }
+
     }
 
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
   }, [
-    advanceEpisode,
     completeCurrentEpisode,
-    detail.mediaType,
-    maybeAutoAdvance,
-    progress.duration,
-    savePlaybackProgress,
+    officialDurationSeconds,
+    providerTrackingAdapter,
+    reportProviderSignal,
+    requestPlayerState,
+    scheduleAutoAdvance,
+    seekPlayerToResume,
+    trustedMessageOrigins,
   ]);
 
   useEffect(() => {
-    if (
-      !started ||
-      provider?.supportsTracking ||
-      playerLoadToken === 0
-    ) {
-      return;
+    window.postMessage(
+      { source: "cineverse-app", type: "companion-ping" },
+      window.location.origin,
+    );
+  }, []);
+
+  useEffect(() => {
+    if (!posterExpanded) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setPosterExpanded(false);
     }
-
-    let ticksSinceSave = 0;
-
-    const timer = window.setInterval(() => {
-      if (
-        document.visibilityState !== "visible" ||
-        trackingDetectedRef.current
-      ) {
-        return;
-      }
-
-      const currentTime = Math.min(
-        estimatedDurationSeconds,
-        fallbackProgressRef.current + 5,
-      );
-      fallbackProgressRef.current = currentTime;
-      ticksSinceSave += 1;
-      setProgress({ currentTime, duration: estimatedDurationSeconds });
-
-      const nearEnd = isNearPlaybackEnd(
-        detail.mediaType,
-        currentTime,
-        estimatedDurationSeconds,
-      );
-      if (nearEnd) {
-        setCompleted(true);
-        completeCurrentEpisode();
-      }
-      if (nearEnd || ticksSinceSave >= 3) {
-        savePlaybackProgress(currentTime, estimatedDurationSeconds, nearEnd);
-        ticksSinceSave = 0;
-      }
-      if (
-        autoNext &&
-        detail.mediaType === "tv" &&
-        currentTime / estimatedDurationSeconds >= 0.98
-      ) {
-        advanceEpisode();
-      }
-    }, 5000);
-
-    return () => window.clearInterval(timer);
-  }, [
-    advanceEpisode,
-    autoNext,
-    completeCurrentEpisode,
-    detail.mediaType,
-    estimatedDurationSeconds,
-    playerLoadToken,
-    provider?.supportsTracking,
-    savePlaybackProgress,
-    started,
-  ]);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [posterExpanded]);
 
   function like() {
     const next = !liked;
@@ -366,6 +604,8 @@ export function WatchExperience({
           title: detail.title,
           posterPath: detail.posterPath,
           backdropPath: detail.backdropPath,
+          genreIds: detail.genreIds,
+          timezoneOffsetMinutes: new Date().getTimezoneOffset(),
           liked: next,
         }),
       }).then((response) => {
@@ -394,6 +634,7 @@ export function WatchExperience({
           backdropPath: detail.backdropPath,
           genreIds: detail.genreIds,
           originalLanguage: detail.originalLanguage,
+          timezoneOffsetMinutes: new Date().getTimezoneOffset(),
           disliked: next,
         }),
       }).then((response) => {
@@ -405,46 +646,98 @@ export function WatchExperience({
     });
   }
 
+  function toggleWatchlist() {
+    const next = !watchlisted;
+    setWatchlisted(next);
+    startTransition(() => {
+      void fetch("/api/watchlist", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          tmdbId: detail.id,
+          mediaType: detail.mediaType,
+          title: detail.title,
+          posterPath: detail.posterPath,
+          backdropPath: detail.backdropPath,
+          genreIds: detail.genreIds,
+          timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+          included: next,
+        }),
+      }).then((response) => {
+        if (!response.ok) setWatchlisted(!next);
+      });
+    });
+  }
+
   function changeSeason(nextSeason: number) {
+    cancelScheduledAutoNext();
     setSeason(nextSeason);
     setEpisode(1);
     setProgress({ currentTime: 0, duration: 0 });
+    setResumeStartSeconds(0);
+    latestDurationRef.current = 0;
     setCompleted(false);
     fallbackProgressRef.current = 0;
     trackingDetectedRef.current = false;
+    companionTrackingRef.current = false;
+    lastProgressPaintAtRef.current = 0;
+    resumeTargetRef.current = 0;
+    resumeAttemptsRef.current = 0;
+    resumeAppliedRef.current = false;
+    setTrackingAvailable(false);
+    setCompanionTrackingActive(false);
     autoAdvancedRef.current = "";
     replaceEpisodeUrl(nextSeason, 1);
   }
 
   function changeEpisode(nextEpisode: number) {
+    cancelScheduledAutoNext();
     setEpisode(nextEpisode);
     setProgress({ currentTime: 0, duration: 0 });
+    setResumeStartSeconds(0);
+    latestDurationRef.current = 0;
     setCompleted(false);
     fallbackProgressRef.current = 0;
     trackingDetectedRef.current = false;
+    companionTrackingRef.current = false;
+    lastProgressPaintAtRef.current = 0;
+    resumeTargetRef.current = 0;
+    resumeAttemptsRef.current = 0;
+    resumeAppliedRef.current = false;
+    setTrackingAvailable(false);
+    setCompanionTrackingActive(false);
     autoAdvancedRef.current = "";
     replaceEpisodeUrl(season, nextEpisode);
   }
 
   function startPlayback() {
+    resumeTargetRef.current = completed ? 0 : fallbackProgressRef.current;
+    setResumeStartSeconds(resumeTargetRef.current);
+    resumeAttemptsRef.current = 0;
+    resumeAppliedRef.current = false;
+    setTrackingAvailable(false);
     setStarted(true);
-    if (progress.currentTime > 0) return;
-    fallbackProgressRef.current = 1;
-    setProgress((current) => ({ ...current, currentTime: 1 }));
-    savePlaybackProgress(
-      1,
-      progress.duration || (activeRuntime ? activeRuntime * 60 : 0),
-    );
   }
 
-  function markAsWatched() {
-    const duration = Math.max(progress.duration, estimatedDurationSeconds);
-    fallbackProgressRef.current = duration;
-    setCompleted(true);
-    setProgress({ currentTime: duration, duration });
-    savePlaybackProgress(duration, duration, true);
-    completeCurrentEpisode();
-    if (detail.mediaType === "tv" && autoNext) advanceEpisode();
+  async function markAsWatched() {
+    const wasCompleted = completed;
+    setCompleted(!wasCompleted);
+    if (wasCompleted) {
+      uncompleteCurrentEpisode();
+    } else {
+      completeCurrentEpisode();
+    }
+    try {
+      if (wasCompleted) {
+        await unmarkWatched();
+      } else {
+        await markWatched();
+      }
+    } catch {
+      setCompleted(wasCompleted);
+      if (wasCompleted) completeCurrentEpisode();
+      else uncompleteCurrentEpisode();
+    }
   }
 
   useEffect(() => {
@@ -480,20 +773,31 @@ export function WatchExperience({
           })
         : { progress: null };
       const episodePayload = episodeResponse.ok
-        ? ((await episodeResponse.json()) as {
+          ? ((await episodeResponse.json()) as {
             episodeInfo?: EpisodeInfo | null;
+            episodes?: SeasonEpisode[];
             seriesProgress?: SeriesProgressSummary | null;
           })
         : {};
 
       const storedProgress = progressPayload.progress;
       fallbackProgressRef.current = storedProgress?.progressSeconds ?? 0;
+      latestDurationRef.current = storedProgress?.durationSeconds ?? 0;
+      resumeTargetRef.current = storedProgress?.completed
+        ? 0
+        : storedProgress?.progressSeconds ?? 0;
+      resumeAttemptsRef.current = 0;
+      resumeAppliedRef.current = false;
       setProgress({
         currentTime: storedProgress?.progressSeconds ?? 0,
         duration: storedProgress?.durationSeconds ?? 0,
       });
+      setResumeStartSeconds(
+        storedProgress?.completed ? 0 : storedProgress?.progressSeconds ?? 0,
+      );
       setCompleted(storedProgress?.completed ?? false);
       setEpisodeInfo(episodePayload.episodeInfo ?? null);
+      setSeasonEpisodes(episodePayload.episodes ?? []);
       setSeriesProgress((current) => {
         const incoming = episodePayload.seriesProgress ?? null;
         if (
@@ -506,6 +810,10 @@ export function WatchExperience({
         }
         return incoming;
       });
+      if (started && resumeTargetRef.current > 30) {
+        requestPlayerState();
+        seekPlayerToResume();
+      }
     }
 
     void loadEpisodeState().catch(() => {
@@ -516,12 +824,13 @@ export function WatchExperience({
     detail.id,
     detail.mediaType,
     episode,
+    requestPlayerState,
     season,
+    seekPlayerToResume,
     selectedSeason?.episodeCount,
+    started,
   ]);
 
-  const displayedDuration =
-    progress.duration || (activeRuntime ? activeRuntime * 60 : 0);
   const seriesPercent =
     seriesProgress?.totalEpisodes
       ? Math.min(
@@ -539,11 +848,94 @@ export function WatchExperience({
       ? person.job === "Director"
       : person.job === "Creator",
   );
+  const releaseYear = detail.releaseDate?.slice(0, 4) ?? null;
+  const playbackLabel =
+    progress.currentTime > 5 && !completed
+      ? `Reprendre a ${formatTime(progress.currentTime)}`
+      : detail.mediaType === "tv"
+        ? `Lire S${season} E${episode}`
+        : "Regarder";
+  const confirmedSessionSeconds = trackingSnapshot?.providerWatchedSeconds ?? 0;
+  const trackingLabel = companionTrackingActive ||
+    trackingSnapshot?.trackingMethod === "browser-extension"
+    ? confirmedSessionSeconds > 0
+      ? `Lecture confirmee par extension · ${formatCompactDuration(confirmedSessionSeconds)}`
+      : "Lecture confirmee par extension"
+    : trackingSnapshot
+      ? trackingSnapshot.completionSource === "provider"
+      ? "Progression detectee"
+      : trackingSnapshot.completionSource === "manual"
+        ? "Marque comme vu"
+        : trackingSnapshot.completionSource === "hybrid"
+          ? "Progression estimee et validee"
+          : trackingSnapshot.completionSource === "estimated"
+            ? "Temps estime"
+            : trackingSnapshot.estimatedWatchedSeconds > 0
+              ? "Temps estime"
+              : "Suivi en attente"
+      : started
+        ? companionAvailable
+          ? "Extension active, detection du lecteur"
+          : trackingAvailable
+          ? "Progression detectee"
+          : "La progression de ce lecteur est estimee"
+        : null;
+  const overviewCanExpand = detail.overview.length > 180;
+  const nextEpisodeSelection = getNextEpisodeSelection(
+    availableSeasons,
+    season,
+    episode,
+  );
+  const episodeCompletedNumbers = new Set(
+    seriesProgress?.seasonNumber === season
+      ? seriesProgress.completedEpisodeNumbers
+      : [],
+  );
+  const displayedEpisodes: SeasonEpisode[] =
+    seasonEpisodes.length > 0
+      ? seasonEpisodes
+      : episodeOptions.map((episodeNumber) => ({
+          episodeNumber,
+          name: `Episode ${episodeNumber}`,
+          overview: "",
+          runtime: null,
+          stillUrl: null,
+          airDate: null,
+        }));
 
   return (
     <main className="min-h-screen overflow-x-hidden bg-[#050505] pt-16 text-white">
       <SiteHeader fixed />
-      <div className="relative">
+      {posterExpanded && detail.posterUrl ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Affiche de ${detail.title}`}
+          className="fixed inset-0 z-[100] grid place-items-center bg-black/90 p-4 backdrop-blur-sm"
+        >
+          <button
+            type="button"
+            onClick={() => setPosterExpanded(false)}
+            className="absolute inset-0 cursor-default"
+            aria-label="Fermer l'affiche"
+          />
+          <button
+            type="button"
+            onClick={() => setPosterExpanded(false)}
+            className="absolute right-4 top-4 inline-flex h-11 w-11 items-center justify-center rounded bg-black/70 text-white ring-1 ring-white/20 transition hover:bg-white hover:text-black"
+            aria-label="Fermer l'affiche"
+            title="Fermer"
+          >
+            <X className="h-5 w-5" />
+          </button>
+          <img
+            src={detail.posterUrl}
+            alt={`Affiche agrandie de ${detail.title}`}
+            className="relative max-h-[90vh] max-w-[92vw] rounded object-contain shadow-2xl ring-1 ring-white/15"
+          />
+        </div>
+      ) : null}
+      <div className="relative" id="watch-player">
         <div className="absolute inset-x-0 top-0 z-20 bg-gradient-to-b from-black to-transparent">
           <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
             <Link
@@ -556,97 +948,360 @@ export function WatchExperience({
           </div>
         </div>
 
-        <section className="grid min-h-[calc(100svh-4rem)] grid-rows-[minmax(42svh,1fr)_auto] sm:grid-rows-[minmax(52vh,1fr)_auto]">
-          <div className="relative bg-black">
-            {started && iframeUrl ? (
-              <iframe
-                key={iframeUrl}
-                ref={playerFrameRef}
-                src={iframeUrl}
-                allow="autoplay; fullscreen; picture-in-picture"
-                allowFullScreen
-                referrerPolicy="no-referrer"
-                sandbox="allow-presentation allow-same-origin allow-scripts"
-                onLoad={() => setPlayerLoadToken((value) => value + 1)}
-                className="h-full min-h-[42svh] w-full border-0 sm:min-h-[55vh]"
-                title={`Lecteur ${detail.title}`}
-              />
-            ) : !iframeUrl ? (
-              <div className="flex h-full min-h-[42svh] items-center justify-center bg-zinc-950 text-zinc-400 sm:min-h-[55vh]">
-                Aucune source configuree
+        <section className="relative h-[46svh] min-h-[320px] max-h-[650px] overflow-hidden bg-black sm:h-[58vh]">
+          {started && playerSrc ? (
+            <iframe
+              key={playerSrc}
+              ref={playerFrameRef}
+              src={playerSrc}
+              onLoad={() => {
+                requestPlayerState();
+                window.setTimeout(seekPlayerToResume, 500);
+                window.setTimeout(requestPlayerState, 1000);
+              }}
+              allow="autoplay; fullscreen; picture-in-picture"
+              allowFullScreen
+              referrerPolicy="no-referrer"
+              sandbox="allow-presentation allow-same-origin allow-scripts"
+              className="h-full w-full border-0"
+              title={`Lecteur ${detail.title}`}
+            />
+          ) : !iframeUrl ? (
+            <div className="grid h-full place-items-center bg-zinc-950 text-zinc-400">
+              Aucune source configuree
+            </div>
+          ) : (
+            <div className="absolute inset-0 grid place-items-center overflow-hidden bg-black">
+              {detail.backdropUrl ?? detail.posterUrl ? (
+                <img
+                  src={detail.backdropUrl ?? detail.posterUrl ?? ""}
+                  alt=""
+                  className="absolute inset-0 h-full w-full object-cover opacity-60"
+                />
+              ) : (
+                <div className="poster-fallback absolute inset-0" />
+              )}
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(229,9,20,.18),transparent_28%),linear-gradient(0deg,#050505_0%,rgba(5,5,5,.2)_52%,rgba(0,0,0,.65)_100%)]" />
+              <div className="absolute inset-x-0 bottom-0 mx-auto hidden max-w-7xl px-8 pb-12 sm:block">
+                <p className="text-sm font-bold text-zinc-300">
+                  {detail.mediaType === "tv"
+                    ? `Saison ${season} · Episode ${episode}${activeRuntime ? ` · ${activeRuntime} min` : ""}`
+                    : [releaseYear, activeRuntime ? `${activeRuntime} min` : null]
+                        .filter(Boolean)
+                        .join(" · ")}
+                </p>
+                <p className="mt-1 max-w-3xl text-2xl font-black sm:text-3xl">
+                  {detail.mediaType === "tv"
+                    ? episodeInfo?.name ?? detail.title
+                    : detail.title}
+                </p>
               </div>
-            ) : null}
-            {!started && iframeUrl ? (
-              <div className="absolute inset-0 grid min-h-[42svh] place-items-center overflow-hidden bg-black sm:min-h-[55vh]">
-                {detail.backdropUrl ?? detail.posterUrl ? (
-                  <img
-                    src={detail.backdropUrl ?? detail.posterUrl ?? ""}
-                    alt=""
-                    className="absolute inset-0 h-full w-full object-cover opacity-45"
-                  />
-                ) : (
-                  <div className="poster-fallback absolute inset-0" />
-                )}
-                <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(229,9,20,.28),transparent_34%),linear-gradient(0deg,#050505,rgba(5,5,5,.45))]" />
+              <button
+                type="button"
+                onClick={startPlayback}
+                className="relative z-10 inline-flex h-16 w-16 items-center justify-center rounded-full bg-white/95 text-black shadow-2xl transition hover:scale-105 hover:bg-white"
+                aria-label={playbackLabel}
+                title={playbackLabel}
+              >
+                <Play className="ml-1 h-7 w-7 fill-black" />
+              </button>
+            </div>
+          )}
+          {autoNextCountdown !== null ? (
+            <div className="absolute bottom-4 right-4 z-30 flex items-center gap-3 rounded bg-black/90 px-4 py-3 text-sm shadow-2xl ring-1 ring-white/15">
+              <span>
+                Episode suivant dans{" "}
+                <strong className="text-white">{autoNextCountdown}s</strong>
+              </span>
+              <button
+                type="button"
+                onClick={cancelScheduledAutoNext}
+                className="text-xs font-bold text-zinc-300 transition hover:text-white"
+              >
+                Annuler
+              </button>
+            </div>
+          ) : null}
+        </section>
+      </div>
+
+      <section
+        aria-label="Reglages de lecture"
+        className="relative z-30 mx-auto -mt-5 max-w-7xl px-4 sm:px-6 lg:px-8"
+      >
+        <div className="grid gap-3 rounded-md bg-[#171717] p-3 shadow-2xl ring-1 ring-white/10 lg:grid-cols-[auto_minmax(0,1fr)] lg:items-end">
+          <button
+            type="button"
+            onClick={startPlayback}
+            disabled={!iframeUrl}
+            className="inline-flex h-12 min-w-44 items-center justify-center gap-2 rounded bg-[#e50914] px-5 text-sm font-black text-white transition hover:bg-[#f6121d] disabled:cursor-not-allowed disabled:bg-zinc-700"
+          >
+            <Play className="h-4 w-4 fill-current" />
+            {started ? "Lecture en cours" : playbackLabel}
+          </button>
+
+          <div
+            className={`grid min-w-0 gap-3 ${
+              detail.mediaType === "tv"
+                ? "sm:grid-cols-2 lg:grid-cols-[1.1fr_1fr_0.8fr_0.9fr_auto]"
+                : "sm:grid-cols-2 lg:grid-cols-[1.2fr_1fr]"
+            }`}
+          >
+            <label className="min-w-0">
+              <span className="mb-1 flex items-center gap-1.5 text-[10px] font-bold uppercase text-zinc-500">
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${
+                    provider && isRecentlyChecked(provider)
+                      ? "bg-emerald-400"
+                      : "bg-zinc-600"
+                  }`}
+                />
+                Source
+                {provider ? (
+                  <span className="truncate font-normal normal-case text-zinc-600">
+                    {providerStatusLabel(provider)}
+                  </span>
+                ) : null}
+              </span>
+              <select
+                value={providerId}
+                onChange={(event) => {
+                  cancelScheduledAutoNext();
+                  trackingDetectedRef.current = false;
+                  companionTrackingRef.current = false;
+                  lastProgressPaintAtRef.current = 0;
+                  setTrackingAvailable(false);
+                  setCompanionTrackingActive(false);
+                  resumeTargetRef.current = fallbackProgressRef.current;
+                  resumeAttemptsRef.current = 0;
+                  resumeAppliedRef.current = false;
+                  setResumeStartSeconds(fallbackProgressRef.current);
+                  setProviderId(event.target.value);
+                }}
+                className="control-field h-10 w-full"
+                aria-label="Source de lecture"
+                disabled={!providers.length}
+              >
+                {providers.map((item) => (
+                  <option
+                    key={item.id}
+                    value={item.id}
+                    title={providerStatusTitle(item)}
+                  >
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="min-w-0">
+              <span className="mb-1 flex items-center gap-1.5 text-[10px] font-bold uppercase text-zinc-500">
+                <Languages className="h-3 w-3" />
+                Langue
+              </span>
+              <select
+                value={activeLanguage}
+                onChange={(event) => {
+                  cancelScheduledAutoNext();
+                  trackingDetectedRef.current = false;
+                  companionTrackingRef.current = false;
+                  lastProgressPaintAtRef.current = 0;
+                  setTrackingAvailable(false);
+                  setCompanionTrackingActive(false);
+                  resumeTargetRef.current = fallbackProgressRef.current;
+                  resumeAttemptsRef.current = 0;
+                  resumeAppliedRef.current = false;
+                  setResumeStartSeconds(fallbackProgressRef.current);
+                  setLanguage(event.target.value);
+                }}
+                className="control-field h-10 w-full"
+                aria-label="Langue de lecture"
+              >
+                {languageOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {detail.mediaType === "tv" ? (
+              <>
+                <label>
+                  <span className="mb-1 block text-[10px] font-bold uppercase text-zinc-500">
+                    Saison
+                  </span>
+                  <select
+                    value={season}
+                    onChange={(event) =>
+                      changeSeason(Number(event.target.value))
+                    }
+                    className="control-field h-10 w-full"
+                    aria-label="Saison"
+                  >
+                    {availableSeasons.map((item) => (
+                      <option key={item.id} value={item.seasonNumber}>
+                        Saison {item.seasonNumber}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span className="mb-1 block text-[10px] font-bold uppercase text-zinc-500">
+                    Episode
+                  </span>
+                  <select
+                    value={episode}
+                    onChange={(event) =>
+                      changeEpisode(Number(event.target.value))
+                    }
+                    className="control-field h-10 w-full"
+                    aria-label="Episode"
+                  >
+                    {episodeOptions.map((episodeNumber) => (
+                      <option key={episodeNumber} value={episodeNumber}>
+                        Episode {episodeNumber}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <button
                   type="button"
-                  onClick={startPlayback}
-                  className="relative z-10 inline-flex h-16 items-center gap-3 rounded bg-white px-8 text-base font-black text-black shadow-2xl transition hover:scale-105 hover:bg-zinc-200"
+                  onClick={() => {
+                    if (autoNext) cancelScheduledAutoNext();
+                    setAutoNext((current) => !current);
+                  }}
+                  aria-pressed={autoNext}
+                  className={`mt-4 inline-flex h-10 items-center justify-center gap-2 rounded px-3 text-xs font-bold ring-1 transition ${
+                    autoNext
+                      ? "bg-white/10 text-white ring-white/20"
+                      : "bg-transparent text-zinc-500 ring-white/10 hover:text-white"
+                  }`}
                 >
-                  <Play className="h-6 w-6 fill-black" />
-                  Play
+                  <SkipForward className="h-4 w-4" />
+                  Auto-next {autoNext ? "active" : "inactif"}
                 </button>
-              </div>
+              </>
             ) : null}
           </div>
+        </div>
+      </section>
 
-          <div className="border-t border-white/10 bg-[#0b0b0b]">
-            <div className="mx-auto grid min-w-0 max-w-7xl gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[150px_minmax(0,1fr)] lg:px-8 xl:grid-cols-[180px_minmax(0,1fr)_320px]">
-              <aside className="hidden lg:block">
+      <section className="mx-auto max-w-7xl px-4 pb-12 pt-8 sm:px-6 lg:px-8">
+        <div className="grid min-w-0 gap-8 xl:grid-cols-[minmax(0,1fr)_300px]">
+          <article className="min-w-0">
+            <div className="grid min-w-0 grid-cols-[110px_minmax(0,1fr)] gap-5 sm:grid-cols-[150px_minmax(0,1fr)] lg:grid-cols-[180px_minmax(0,1fr)]">
+              <div>
                 {detail.posterUrl ? (
-                  <img
-                    src={detail.posterUrl}
-                    alt={detail.title}
-                    className="aspect-[2/3] w-full rounded object-cover shadow-2xl ring-1 ring-white/10"
-                  />
+                  <button
+                    type="button"
+                    onClick={() => setPosterExpanded(true)}
+                    className="group relative block w-full overflow-hidden rounded text-left shadow-2xl ring-1 ring-white/10 transition hover:ring-white/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                    aria-label={`Agrandir l'affiche de ${detail.title}`}
+                    title="Agrandir l'affiche"
+                  >
+                    <img
+                      src={detail.posterUrl}
+                      alt={detail.title}
+                      className="aspect-[2/3] w-full object-cover transition duration-200 group-hover:scale-[1.02]"
+                    />
+                    <span className="absolute bottom-2 right-2 inline-flex h-9 w-9 items-center justify-center rounded bg-black/75 text-white opacity-0 ring-1 ring-white/20 transition group-hover:opacity-100 group-focus-visible:opacity-100">
+                      <ZoomIn className="h-4 w-4" />
+                    </span>
+                  </button>
                 ) : (
                   <div className="poster-fallback aspect-[2/3] rounded ring-1 ring-white/10" />
                 )}
-              </aside>
+              </div>
 
-              <section className="min-w-0 overflow-hidden">
-                <div className="mb-3 flex flex-wrap items-center gap-3 text-sm text-zinc-300">
-                  <span>{detail.mediaType === "movie" ? "Film" : "Serie"}</span>
+              <div className="min-w-0">
+                <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-zinc-400">
+                  <span className="font-bold uppercase text-zinc-200">
+                    {detail.mediaType === "movie" ? "Film" : "Serie"}
+                  </span>
                   {detail.voteCount > 0 && detail.voteAverage > 0 ? (
                     <span className="inline-flex items-center gap-1">
                       <Star className="h-4 w-4 fill-[#f5c542] text-[#f5c542]" />
                       {detail.voteAverage.toFixed(1)}
                     </span>
                   ) : null}
+                  {releaseYear ? <span>{releaseYear}</span> : null}
                   {detail.mediaType === "tv" ? (
                     <span>
-                      Saison {season} · Episode {episode}
+                      S{season} E{episode}
                     </span>
                   ) : null}
                   {activeRuntime ? <span>{activeRuntime} min</span> : null}
                 </div>
-                <h1 className="text-3xl font-black tracking-normal sm:text-5xl">{detail.title}</h1>
-                <p className="mt-4 max-w-3xl text-sm leading-6 text-zinc-300 sm:text-base">
-                  {detail.overview}
-                </p>
+                <h1 className="text-3xl font-black tracking-normal sm:text-4xl lg:text-5xl">
+                  {detail.title}
+                </h1>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {detail.genres.map((genre) => (
+                    <Link
+                      key={genre.id}
+                      href={`/browse?type=${detail.mediaType}${isAnime ? "&catalog=anime" : ""}&genre=${genre.id}`}
+                      className="rounded bg-white/[0.07] px-3 py-1.5 text-xs text-zinc-300 transition hover:bg-white/15 hover:text-white"
+                    >
+                      {genre.name}
+                    </Link>
+                  ))}
+                </div>
+
+                <div className="mt-5 max-w-3xl">
+                  <div className="relative">
+                    <p
+                      id="media-overview"
+                      className={`text-sm leading-6 text-zinc-300 transition-[max-height] duration-200 sm:text-base sm:leading-7 ${
+                        overviewExpanded || !overviewCanExpand
+                          ? "max-h-none"
+                          : "max-h-28 overflow-hidden"
+                      }`}
+                    >
+                      {detail.overview || "Aucun synopsis disponible."}
+                    </p>
+                    {!overviewExpanded && overviewCanExpand ? (
+                      <span
+                        aria-hidden="true"
+                        className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-[#050505] to-transparent"
+                      />
+                    ) : null}
+                  </div>
+                  {overviewCanExpand ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setOverviewExpanded((current) => !current)
+                      }
+                      aria-expanded={overviewExpanded}
+                      aria-controls="media-overview"
+                      className="mt-2 inline-flex h-8 items-center text-xs font-bold text-zinc-400 transition hover:text-white"
+                    >
+                      {overviewExpanded ? "Voir moins" : "Voir plus"}
+                    </button>
+                  ) : null}
+                </div>
+
                 {featuredCrew.length ? (
-                  <div className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+                  <div className="mt-5 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
                     <span className="font-bold text-zinc-500">
                       {detail.mediaType === "movie"
                         ? featuredCrew.length > 1
-                          ? "Réalisateurs"
-                          : "Réalisateur"
-                        : "Création"}
+                          ? "Realisateurs"
+                          : "Realisateur"
+                        : "Creation"}
                     </span>
                     {featuredCrew.map((person) => (
                       <Link
                         key={`${person.id}-${person.job}`}
-                        href={personBrowseHref(detail, person.id, person.name, person.job, isAnime)}
+                        href={personBrowseHref(
+                          detail,
+                          person.id,
+                          person.name,
+                          person.job,
+                          isAnime,
+                        )}
                         className="font-semibold text-zinc-200 transition hover:text-[#e50914]"
                       >
                         {person.name}
@@ -654,242 +1309,307 @@ export function WatchExperience({
                     ))}
                   </div>
                 ) : null}
-                <div className="mt-5 flex flex-wrap gap-2">
-                  {detail.genres.map((genre) => (
-                    <Link
-                      key={genre.id}
-                      href={`/browse?type=${detail.mediaType}${isAnime ? "&catalog=anime" : ""}&genre=${genre.id}`}
-                      className="rounded bg-white/10 px-3 py-1 text-xs text-zinc-200 transition hover:bg-[#e50914] hover:text-white"
-                    >
-                      {genre.name}
-                    </Link>
-                  ))}
-                </div>
-                {detail.cast.length ? (
-                  <div className="mt-6 min-w-0 max-w-full overflow-hidden">
-                    <h2 className="mb-3 text-sm font-black uppercase tracking-[0.12em] text-zinc-400">
-                      Casting
-                    </h2>
-                    <div className="scrollbar-none flex w-full max-w-full gap-3 overflow-x-auto pb-2">
-                      {detail.cast.map((person) => (
-                        <Link
-                          key={person.id}
-                          href={personBrowseHref(
-                            detail,
-                            person.id,
-                            person.name,
-                            undefined,
-                            isAnime,
-                          )}
-                          className="group w-[92px] shrink-0"
-                        >
-                          <div className="aspect-[3/4] overflow-hidden rounded bg-zinc-900 ring-1 ring-white/10">
-                            {person.profileUrl ? (
-                              <img
-                                src={person.profileUrl}
-                                alt={person.name}
-                                className="h-full w-full object-cover transition group-hover:scale-105"
-                                loading="lazy"
-                              />
-                            ) : (
-                              <div className="grid h-full place-items-center px-2 text-center text-xs text-zinc-400">
-                                {person.name}
-                              </div>
-                            )}
-                          </div>
-                          <p className="mt-2 line-clamp-2 text-xs font-bold text-zinc-100">{person.name}</p>
-                        </Link>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-              </section>
+              </div>
+            </div>
+          </article>
 
-              <aside className="order-first min-w-0 rounded bg-zinc-950 p-4 ring-1 ring-white/10 lg:order-none lg:col-span-2 xl:col-span-1">
-                <section>
-                  <div className="mb-3 flex items-center justify-between gap-3">
-                    <h2 className="text-xs font-bold uppercase text-zinc-500">
-                      Lecture
-                    </h2>
-                    <span className="truncate rounded bg-white/10 px-2 py-1 text-[11px] font-bold text-zinc-200">
-                      Source : {provider?.name ?? "Indisponible"}
+          <aside className="min-w-0 border-t border-white/10 pt-6 xl:border-l xl:border-t-0 xl:pl-7 xl:pt-0">
+            <section>
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <h2 className="text-xs font-bold uppercase text-zinc-500">
+                  Progression
+                </h2>
+                {!trackingAvailable ? (
+                  <span
+                    className="inline-flex h-7 w-7 items-center justify-center rounded text-zinc-500 ring-1 ring-white/10"
+                    title="La progression de ce lecteur est estimee."
+                    aria-label="Progression estimee pour cette source"
+                  >
+                    <Info className="h-3.5 w-3.5" />
+                  </span>
+                ) : null}
+              </div>
+              {detail.mediaType === "tv" && seriesProgress ? (
+                <>
+                  <div className="flex items-center justify-between gap-3 text-sm text-zinc-300">
+                    <span>Saison {seriesProgress.seasonNumber}</span>
+                    <span>
+                      {seriesProgress.completedEpisodes}/
+                      {seriesProgress.totalEpisodes} vus
                     </span>
                   </div>
-                  <div className="grid grid-cols-[repeat(auto-fit,minmax(88px,1fr))] gap-2">
-                    {providers.map((item) => (
-                      <button
-                        key={item.id}
-                        type="button"
-                        onClick={() => {
-                          trackingDetectedRef.current = false;
-                          setProviderId(item.id);
-                        }}
-                        className={`h-9 rounded border px-3 text-xs font-bold transition ${
-                          providerId === item.id
-                            ? "border-[#e50914] bg-[#e50914] text-white"
-                            : "border-white/10 bg-white/[0.06] text-zinc-300 hover:text-white"
-                        }`}
-                      >
-                        {item.name}
-                      </button>
-                    ))}
+                  <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
+                    <span
+                      className="progress-fill block h-full rounded-full bg-[#e50914]"
+                      style={{ width: `${seriesPercent}%` }}
+                    />
                   </div>
-                  <div className="mt-3 grid grid-cols-[auto_1fr] items-center gap-3">
-                    <Languages className="h-4 w-4 text-zinc-400" />
-                    <select
-                      value={activeLanguage}
-                      onChange={(event) => setLanguage(event.target.value)}
-                      className="control-field w-full"
-                      aria-label="Langue de lecture"
-                    >
-                      {languageOptions.map((option) => (
-                        <option key={option.id} value={option.id}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  {detail.mediaType === "tv" ? (
-                    <>
-                      <div className="mt-3 grid grid-cols-2 gap-3">
-                        <select
-                          value={season}
-                          onChange={(event) =>
-                            changeSeason(Number(event.target.value))
-                          }
-                          className="control-field w-full"
-                          aria-label="Saison"
-                        >
-                          {availableSeasons.map((item) => (
-                            <option key={item.id} value={item.seasonNumber}>
-                              Saison {item.seasonNumber}
-                            </option>
-                          ))}
-                        </select>
-                        <select
-                          value={episode}
-                          onChange={(event) =>
-                            changeEpisode(Number(event.target.value))
-                          }
-                          className="control-field w-full"
-                          aria-label="Episode"
-                        >
-                          {episodeOptions.map((episodeNumber) => (
-                            <option key={episodeNumber} value={episodeNumber}>
-                              Episode {episodeNumber}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setAutoNext((current) => !current)}
-                        aria-pressed={autoNext}
-                        className={`mt-3 flex h-10 w-full items-center justify-between rounded px-3 text-sm font-bold transition ${
-                          autoNext
-                            ? "bg-[#e50914] text-white"
-                            : "bg-white/[0.06] text-zinc-200 ring-1 ring-white/10 hover:bg-white/10"
-                        }`}
-                      >
-                        <span className="inline-flex items-center gap-2">
-                          <SkipForward className="h-4 w-4" />
-                          Episode suivant
-                        </span>
-                        <span className="text-xs">
-                          {autoNext ? "Active" : "Desactive"}
-                        </span>
-                      </button>
-                    </>
-                  ) : null}
-                </section>
+                  <p className="mt-2 truncate text-xs text-zinc-500">
+                    {episodeInfo?.name ?? `Episode ${episode}`}
+                  </p>
+                </>
+              ) : (
+                <p className="text-sm text-zinc-300">
+                  {completed
+                    ? "Film termine"
+                    : trackingAvailable && progress.duration > 0
+                      ? `${formatTime(progress.currentTime)} / ${formatTime(progress.duration)}`
+                      : "Lecture non terminee"}
+                </p>
+              )}
+              {trackingLabel ? (
+                <p className="mt-2 text-xs text-zinc-500">{trackingLabel}</p>
+              ) : null}
 
-                <section className="mt-4 border-t border-white/10 pt-4">
-                  <h2 className="mb-3 text-xs font-bold uppercase text-zinc-500">
-                    Votre avis
-                  </h2>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={like}
-                      aria-pressed={liked}
-                      className={`inline-flex h-11 items-center justify-center gap-2 rounded px-3 text-sm font-bold transition ${
-                        liked
-                          ? "bg-[#e50914] text-white hover:bg-[#f6121d]"
-                          : "bg-white text-black hover:bg-zinc-200"
-                      }`}
-                    >
-                      <Heart className={`h-4 w-4 ${liked ? "fill-white" : ""}`} />
-                      {liked ? "Aime" : "J'aime"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={dislike}
-                      aria-pressed={disliked}
-                      className={`inline-flex h-11 items-center justify-center gap-2 rounded px-3 text-sm font-bold transition ${
-                        disliked
-                          ? "bg-white text-black"
-                          : "bg-white/[0.06] text-zinc-200 ring-1 ring-white/10 hover:bg-white/10"
-                      }`}
-                    >
-                      <ThumbsDown
-                        className={`h-4 w-4 ${disliked ? "fill-black" : ""}`}
-                      />
-                      {disliked ? "Ignore" : "Pas pour moi"}
-                    </button>
-                  </div>
-                </section>
+              {detail.mediaType === "tv" && nextEpisodeSelection ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    advanceEpisode(true);
+                    document
+                      .getElementById("watch-player")
+                      ?.scrollIntoView({ behavior: "smooth" });
+                  }}
+                  className="mt-4 inline-flex h-10 w-full items-center justify-center gap-2 rounded bg-white/10 px-3 text-sm font-bold text-white transition hover:bg-white/15"
+                >
+                  <SkipForward className="h-4 w-4" />
+                  Episode suivant
+                </button>
+              ) : null}
+            </section>
 
-                <section className="mt-4 border-t border-white/10 pt-4">
-                  <h2 className="mb-3 text-xs font-bold uppercase text-zinc-500">
-                    Progression
-                  </h2>
-                  {detail.mediaType === "tv" && seriesProgress ? (
-                    <div className="mb-3">
-                      <div className="mb-2 flex items-center justify-between gap-3 text-xs text-zinc-300">
-                        <span>Saison {seriesProgress.seasonNumber}</span>
-                        <span>
-                          {seriesProgress.completedEpisodes}/
-                          {seriesProgress.totalEpisodes} episodes vus
-                        </span>
-                      </div>
-                      <div className="h-1.5 overflow-hidden rounded-full bg-white/10">
-                        <span
-                          className="block h-full rounded-full bg-[#e50914]"
-                          style={{ width: `${seriesPercent}%` }}
-                        />
-                      </div>
-                    </div>
-                  ) : null}
-                  <div className="mb-2 min-w-0 text-xs text-zinc-500">
-                    {detail.mediaType === "tv"
-                      ? episodeInfo?.name ?? `Episode ${episode}`
-                      : "Film en cours"}
-                  </div>
-                  <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
-                    <div className="rounded bg-white/5 p-3 text-xs text-zinc-300">
-                      {formatTime(progress.currentTime)} /{" "}
-                      {formatTime(displayedDuration)}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={markAsWatched}
-                      aria-pressed={completed}
-                      className={`inline-flex h-10 items-center gap-2 rounded px-3 text-xs font-bold transition ${
-                        completed
-                          ? "bg-[#e50914] text-white"
-                          : "bg-white/[0.06] text-zinc-200 ring-1 ring-white/10 hover:bg-white/10"
-                      }`}
-                    >
-                      <Check className="h-4 w-4" />
-                      {completed ? "Vu" : "Marquer vu"}
-                    </button>
-                  </div>
-                </section>
-              </aside>
+            <section className="mt-6 border-t border-white/10 pt-6">
+              <button
+                type="button"
+                onClick={toggleWatchlist}
+                aria-pressed={watchlisted}
+                className={`inline-flex h-10 w-full items-center justify-center gap-2 rounded px-3 text-sm font-bold ring-1 transition ${
+                  watchlisted
+                    ? "bg-white/15 text-white ring-white/20"
+                    : "bg-transparent text-zinc-300 ring-white/10 hover:bg-white/[0.06]"
+                }`}
+              >
+                {watchlisted ? (
+                  <Check className="h-4 w-4" />
+                ) : (
+                  <ListPlus className="h-4 w-4" />
+                )}
+                {watchlisted ? "Dans ma liste" : "Ajouter a ma liste"}
+              </button>
+
+              <div className="mt-5">
+                <h2 className="mb-3 text-xs font-bold uppercase text-zinc-500">
+                  Votre avis
+                </h2>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={like}
+                    aria-pressed={liked}
+                    className={`inline-flex h-10 items-center justify-center gap-2 rounded px-2 text-xs font-bold ring-1 transition ${
+                      liked
+                        ? "bg-[#e50914]/20 text-red-100 ring-[#e50914]/50"
+                        : "bg-transparent text-zinc-300 ring-white/10 hover:bg-white/[0.06]"
+                    }`}
+                  >
+                    <Heart
+                      className={`h-4 w-4 ${liked ? "fill-current" : ""}`}
+                    />
+                    J&apos;aime
+                  </button>
+                  <button
+                    type="button"
+                    onClick={dislike}
+                    aria-pressed={disliked}
+                    className={`inline-flex h-10 items-center justify-center gap-2 rounded px-2 text-xs font-bold ring-1 transition ${
+                      disliked
+                        ? "bg-white/15 text-white ring-white/25"
+                        : "bg-transparent text-zinc-300 ring-white/10 hover:bg-white/[0.06]"
+                    }`}
+                  >
+                    <ThumbsDown
+                      className={`h-4 w-4 ${disliked ? "fill-current" : ""}`}
+                    />
+                    <span className="whitespace-nowrap">Pas pour moi</span>
+                  </button>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={markAsWatched}
+                aria-pressed={completed}
+                className={`mt-5 inline-flex h-10 w-full items-center justify-center gap-2 rounded px-3 text-xs font-bold ring-1 transition ${
+                  completed
+                    ? "bg-white/15 text-white ring-white/20"
+                    : "bg-transparent text-zinc-400 ring-white/10 hover:bg-white/[0.06] hover:text-white"
+                }`}
+              >
+                <Check className="h-4 w-4" />
+                {completed ? "Marquer comme non vu" : "Marquer vu"}
+              </button>
+            </section>
+          </aside>
+        </div>
+
+        {detail.mediaType === "tv" ? (
+          <section className="mt-10 border-t border-white/10 pt-8">
+            <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
+              <div>
+                <p className="text-xs font-bold uppercase text-zinc-500">
+                  Episodes
+                </p>
+                <h2 className="mt-1 text-2xl font-black">
+                  Saison {season}
+                </h2>
+              </div>
+              <div className="flex items-center gap-3">
+                {seriesProgress ? (
+                  <span className="text-sm text-zinc-500">
+                    {seriesProgress.completedEpisodes}/
+                    {seriesProgress.totalEpisodes} vus
+                  </span>
+                ) : null}
+                <select
+                  value={season}
+                  onChange={(event) =>
+                    changeSeason(Number(event.target.value))
+                  }
+                  className="control-field h-10 min-w-32"
+                  aria-label="Saison de la liste des episodes"
+                >
+                  {availableSeasons.map((item) => (
+                    <option key={item.id} value={item.seasonNumber}>
+                      Saison {item.seasonNumber}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
-          </div>
-        </section>
-      </div>
+
+            <div className="grid gap-3 lg:grid-cols-2">
+              {displayedEpisodes.map((item) => {
+                const isCurrent = item.episodeNumber === episode;
+                const isCompleted = episodeCompletedNumbers.has(
+                  item.episodeNumber,
+                );
+                return (
+                  <button
+                    key={item.episodeNumber}
+                    type="button"
+                    onClick={() => {
+                      changeEpisode(item.episodeNumber);
+                      document
+                        .getElementById("watch-player")
+                        ?.scrollIntoView({ behavior: "smooth" });
+                    }}
+                    aria-current={isCurrent ? "true" : undefined}
+                    className={`group grid min-h-24 grid-cols-[112px_minmax(0,1fr)_auto] items-center gap-3 overflow-hidden rounded border p-2 text-left transition sm:grid-cols-[144px_minmax(0,1fr)_auto] ${
+                      isCurrent
+                        ? "border-[#e50914]/70 bg-[#e50914]/10"
+                        : "border-white/10 bg-white/[0.03] hover:bg-white/[0.07]"
+                    }`}
+                  >
+                    <div className="relative aspect-video overflow-hidden rounded-sm bg-zinc-900">
+                      <div className="poster-fallback absolute inset-0" />
+                      {item.stillUrl ? (
+                        <img
+                          src={item.stillUrl}
+                          alt=""
+                          loading="lazy"
+                          className="relative h-full w-full object-cover transition duration-200 group-hover:scale-[1.03]"
+                          onError={(event) => {
+                            event.currentTarget.style.display = "none";
+                          }}
+                        />
+                      ) : null}
+                    </div>
+                    <span className="min-w-0">
+                      <span className="block text-[11px] font-bold uppercase text-zinc-500">
+                        Episode {item.episodeNumber}
+                      </span>
+                      <span className="mt-1 block truncate text-sm font-bold text-zinc-100">
+                        {item.name}
+                      </span>
+                      {item.overview ? (
+                        <span className="mt-1 hidden line-clamp-2 text-xs leading-5 text-zinc-500 sm:block">
+                          {item.overview}
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className="flex min-w-8 flex-col items-end gap-2 text-xs text-zinc-500">
+                      {item.runtime ? <span>{item.runtime} min</span> : null}
+                      {isCompleted ? (
+                        <Check className="h-4 w-4 text-emerald-400" />
+                      ) : (
+                        <Play className="h-4 w-4" />
+                      )}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        ) : null}
+
+        {detail.cast.length ? (
+          <section className="mt-10 border-t border-white/10 pt-8">
+            <div className="mb-4 flex items-end justify-between gap-4">
+              <div>
+                <p className="text-xs font-bold uppercase text-zinc-500">
+                  Distribution
+                </p>
+                <h2 className="mt-1 text-2xl font-black">Casting</h2>
+              </div>
+              <span className="text-xs text-zinc-600">Defiler pour voir la suite</span>
+            </div>
+            <div className="relative">
+              <div className="scrollbar-none flex touch-pan-x gap-4 overflow-x-auto overscroll-x-contain pb-3 pr-16">
+                {detail.cast.map((person, index) => (
+                  <Link
+                    key={`${person.id}-${index}`}
+                    href={personBrowseHref(
+                      detail,
+                      person.id,
+                      person.name,
+                      undefined,
+                      isAnime,
+                    )}
+                    className="group w-28 shrink-0 sm:w-32"
+                  >
+                    <div className="relative aspect-[3/4] overflow-hidden rounded bg-zinc-900 ring-1 ring-white/10">
+                      <div className="absolute inset-0 grid place-items-center px-2 text-center text-xs text-zinc-500">
+                        {person.name}
+                      </div>
+                      {person.profileUrl ? (
+                        <img
+                          src={person.profileUrl}
+                          alt={person.name}
+                          className="relative h-full w-full object-cover transition duration-200 group-hover:scale-[1.03]"
+                          loading="lazy"
+                          onError={(event) => {
+                            event.currentTarget.style.display = "none";
+                          }}
+                        />
+                      ) : null}
+                    </div>
+                    <p className="mt-2 truncate text-sm font-bold text-zinc-100">
+                      {person.name}
+                    </p>
+                    <p className="mt-0.5 truncate text-xs text-zinc-500">
+                      {person.character || "Role non renseigne"}
+                    </p>
+                  </Link>
+                ))}
+              </div>
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-y-0 right-0 w-16 bg-gradient-to-l from-[#050505] to-transparent"
+              />
+            </div>
+          </section>
+        ) : null}
+      </section>
     </main>
   );
 }
@@ -902,37 +1622,70 @@ function parseJson(value: string) {
   }
 }
 
-function normalizePlaybackEvent(data: unknown) {
-  if (typeof data === "string") {
-    return isEndedEvent(data)
-      ? { currentTime: 0, duration: 0, ended: true }
-      : null;
-  }
-  if (!data || typeof data !== "object") return null;
-
-  const message = data as Record<string, unknown>;
-  const eventName = String(
-    message.type ?? message.event ?? message.action ?? "",
+function getNextEpisodeSelection(
+  seasons: NonNullable<MediaDetails["seasons"]>,
+  currentSeasonNumber: number,
+  currentEpisodeNumber: number,
+) {
+  const currentSeason = seasons.find(
+    (item) => item.seasonNumber === currentSeasonNumber,
   );
-  const currentTime = Number(message.currentTime ?? message.time ?? 0);
-  const duration = Number(message.duration ?? message.total ?? 0);
-  const percentage = Number(message.percentage ?? message.percent ?? 0);
-  const ended =
-    isEndedEvent(eventName) ||
-    Number((message.info as Record<string, unknown> | undefined)?.playerState) === 0 ||
-    percentage >= 98;
-
-  if (ended) return { currentTime, duration, ended: true };
-  if (currentTime > 0 && duration > 0) {
-    return { currentTime, duration, ended: false };
+  if (
+    currentSeason &&
+    currentEpisodeNumber + 1 <= currentSeason.episodeCount
+  ) {
+    return {
+      seasonNumber: currentSeasonNumber,
+      episodeNumber: currentEpisodeNumber + 1,
+    };
   }
-  return null;
+
+  const nextSeason = seasons.find(
+    (item) =>
+      item.seasonNumber > currentSeasonNumber && item.episodeCount > 0,
+  );
+  return nextSeason
+    ? { seasonNumber: nextSeason.seasonNumber, episodeNumber: 1 }
+    : null;
 }
 
-function isEndedEvent(value: string) {
-  return ["ended", "videoended", "complete", "completed"].includes(
-    value.toLowerCase(),
-  );
+function isRecentlyChecked(provider: EmbedProvider) {
+  const checkedAt = provider.reliability?.lastCheckedAt;
+  if (!checkedAt || (provider.reliability?.score ?? 0) < 50) return false;
+  const age = Date.now() - Date.parse(checkedAt);
+  return Number.isFinite(age) && age >= 0 && age <= 72 * 60 * 60 * 1000;
+}
+
+function providerStatusLabel(provider: EmbedProvider) {
+  const details: string[] = [];
+  if (provider.quality) details.push(`${provider.quality}p`);
+  const languages = provider.languages
+    ?.slice(0, 2)
+    .map((language) => language.label)
+    .join("/");
+  if (languages) details.push(languages);
+  if (details.length) return details.join(" · ");
+  return isRecentlyChecked(provider) ? "Source testee" : "Non verifiee";
+}
+
+function providerStatusTitle(provider: EmbedProvider) {
+  const checkedAt = provider.reliability?.lastCheckedAt;
+  const status = checkedAt
+    ? `Dernier controle : ${checkedAt.slice(0, 10)}`
+    : "Aucun controle recent enregistre";
+  return `${provider.name} · ${providerStatusLabel(provider)} · ${status}`;
+}
+
+function appendResumeFragment(url: string, seconds: number) {
+  if (!url || seconds <= 30) return url;
+  const fragment = `t=${Math.round(seconds)}&cineverseResume=1`;
+  return url.includes("#") ? `${url}&${fragment}` : `${url}#${fragment}`;
+}
+
+function firstPositiveNumber(...values: number[]) {
+  return values.find(
+    (value) => Number.isFinite(value) && value > 0,
+  ) ?? 0;
 }
 
 function replaceEpisodeUrl(season: number, episode: number) {
@@ -940,18 +1693,6 @@ function replaceEpisodeUrl(season: number, episode: number) {
   url.searchParams.set("season", String(season));
   url.searchParams.set("episode", String(episode));
   window.history.replaceState(null, "", url);
-}
-
-function isNearPlaybackEnd(
-  mediaType: MediaDetails["mediaType"],
-  currentTime: number,
-  duration: number,
-) {
-  if (duration <= 0) return false;
-  const ratio = currentTime / duration;
-  const remaining = Math.max(0, duration - currentTime);
-  const creditsWindow = mediaType === "movie" ? 7 * 60 : 3 * 60;
-  return ratio >= 0.9 || (ratio >= 0.75 && remaining <= creditsWindow);
 }
 
 function personBrowseHref(
@@ -977,4 +1718,13 @@ function formatTime(seconds: number) {
   const minutes = Math.floor(seconds / 60);
   const remaining = Math.floor(seconds % 60);
   return `${String(minutes).padStart(2, "0")}:${String(remaining).padStart(2, "0")}`;
+}
+
+function formatCompactDuration(seconds: number) {
+  const total = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (hours > 0) return `${hours} h ${minutes} min lues`;
+  if (minutes > 0) return `${minutes} min lues`;
+  return `${total} s lues`;
 }

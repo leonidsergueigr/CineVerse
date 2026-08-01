@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getActiveProfileId } from "@/lib/active-profile";
-import { getContinueWatching, getProgress, saveProgress } from "@/lib/store";
+import {
+  getContinueWatching,
+  getProgress,
+  recordViewingEvent,
+  saveProgress,
+} from "@/lib/store";
 import type { MediaType } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -31,7 +36,7 @@ export async function POST(request: NextRequest) {
 
   const profileId = await getActiveProfileId();
   if (!profileId) return profileRequired();
-  saveProgress(profileId, {
+  const progress = saveProgress(profileId, {
     tmdbId: Number(body.tmdbId),
     mediaType: body.mediaType,
     seasonNumber: nullableNumber(body.seasonNumber),
@@ -41,13 +46,51 @@ export async function POST(request: NextRequest) {
     backdropPath: body.backdropPath ?? null,
     progressSeconds: Math.max(0, Math.floor(Number(body.progressSeconds) || 0)),
     durationSeconds: Math.max(0, Math.floor(Number(body.durationSeconds) || 0)),
-    completed: body.completed === true,
+    completed:
+      typeof body.completed === "boolean" ? body.completed : undefined,
     seriesEpisodeCounts: Array.isArray(body.seriesEpisodeCounts)
       ? body.seriesEpisodeCounts
       : [],
   });
+  const eventType = progress.newlyCompleted
+    ? "COMPLETED"
+    : body.eventType === "PLAY_STARTED"
+      ? "PLAY_STARTED"
+      : body.eventType === "PROGRESS_UPDATED"
+        ? "PROGRESS_UPDATED"
+        : null;
+  if (eventType) {
+    recordViewingEvent(profileId, {
+      eventType,
+      tmdbId: Number(body.tmdbId),
+      mediaType: body.mediaType,
+      title: String(body.title ?? "Sans titre"),
+      posterPath: body.posterPath ?? null,
+      seasonNumber: nullableNumber(body.seasonNumber),
+      episodeNumber: nullableNumber(body.episodeNumber),
+      positionSeconds: Math.max(
+        0,
+        Math.floor(Number(body.progressSeconds) || 0),
+      ),
+      durationSeconds: Math.max(
+        0,
+        Math.floor(Number(body.durationSeconds) || 0),
+      ),
+      audioLanguage: String(body.audioLanguage ?? ""),
+      subtitleLanguage:
+        typeof body.subtitleLanguage === "string"
+          ? body.subtitleLanguage
+          : null,
+      provider: String(body.provider ?? ""),
+      sessionId: String(body.sessionId ?? ""),
+      genreIds: Array.isArray(body.genreIds)
+        ? body.genreIds.map(Number).filter(Number.isFinite)
+        : [],
+      timezoneOffsetMinutes: Number(body.timezoneOffsetMinutes) || 0,
+    });
+  }
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, completed: progress.completed });
 }
 
 function profileRequired() {

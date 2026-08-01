@@ -24,6 +24,8 @@ export type StreamCandidate = {
   capabilities: {
     autoplay: boolean;
     progressTracking: boolean;
+    playState: boolean;
+    endedEvent: boolean;
     postMessage: boolean;
   };
   reliability: {
@@ -56,7 +58,17 @@ type PlayerHostRule = {
 const DEFAULT_CAPABILITIES = {
   autoplay: true,
   progressTracking: false,
+  playState: false,
+  endedEvent: false,
   postMessage: false,
+};
+
+const VIDEOJS_MESSAGE_CAPABILITIES = {
+  autoplay: true,
+  progressTracking: true,
+  playState: true,
+  endedEvent: true,
+  postMessage: true,
 };
 
 export const PLAYER_HOST_REGISTRY: Record<PlayerHostId, PlayerHostRule> = {
@@ -70,7 +82,7 @@ export const PLAYER_HOST_REGISTRY: Record<PlayerHostId, PlayerHostRule> = {
       { hostname: "uqload.co", pathname: /^\/embed-[a-z0-9]+\.html$/i },
       { hostname: "uqload.to", pathname: /^\/embed-[a-z0-9]+\.html$/i },
     ],
-    capabilities: DEFAULT_CAPABILITIES,
+    capabilities: VIDEOJS_MESSAGE_CAPABILITIES,
   },
   voe: {
     id: "voe",
@@ -250,7 +262,27 @@ export function streamCandidatesToProviders(
     const reliability = Math.max(
       ...hostCandidates.map((candidate) => candidate.reliability.score),
     );
+    const latestCheck = hostCandidates
+      .map((candidate) => candidate.reliability.lastCheckedAt)
+      .filter((value): value is string => Boolean(value))
+      .sort((left, right) => Date.parse(right) - Date.parse(left))[0] ?? null;
+    const quality =
+      hostCandidates
+        .map((candidate) => candidate.quality)
+        .filter((value): value is number => typeof value === "number")
+        .sort((left, right) => right - left)[0] ?? null;
     const host = PLAYER_HOST_REGISTRY[hostId];
+    const messageOrigins = Array.from(
+      new Set(
+        hostCandidates.flatMap((candidate) => {
+          try {
+            return [new URL(candidate.embedUrl).origin];
+          } catch {
+            return [];
+          }
+        }),
+      ),
+    );
 
     return [
       {
@@ -258,8 +290,20 @@ export function streamCandidatesToProviders(
         name: host.name,
         template: options.templateForHost(hostId),
         supportsTracking: host.capabilities.progressTracking,
+        trackingCapabilities: {
+          progress: host.capabilities.progressTracking,
+          playState: host.capabilities.playState,
+          endedEvent: host.capabilities.endedEvent,
+          postMessage: host.capabilities.postMessage,
+        },
+        messageOrigins,
         supportsLanguage: true,
         priority: 120 - reliability,
+        quality,
+        reliability: {
+          score: reliability,
+          lastCheckedAt: latestCheck,
+        },
         languages,
       } satisfies EmbedProvider,
     ];
@@ -327,7 +371,10 @@ export function streamLanguageLabel(language: StreamLanguageId) {
 }
 
 export function getAllowedPlayerFrameOrigins() {
-  const origins = new Set<string>(["'self'"]);
+  const origins = new Set<string>([
+    "'self'",
+    "https://www.youtube-nocookie.com",
+  ]);
 
   for (const host of Object.values(PLAYER_HOST_REGISTRY)) {
     for (const origin of host.origins) {

@@ -14,8 +14,9 @@ import {
   getSeriesProgressSummary,
   hasDislike,
   hasLike,
+  hasWatchlist,
 } from "@/lib/store";
-import { getDetails, getEpisodeInfo } from "@/lib/tmdb";
+import { getDetails, getSeasonEpisodes } from "@/lib/tmdb";
 import type { MediaType } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -76,15 +77,17 @@ export default async function WatchPage({ params, searchParams }: PageProps) {
     ...sourceProviders,
   ].sort((left, right) => left.priority - right.priority);
   const progress = getProgress(profileId, id, mediaType, season, episode);
-  const [episodeInfo, seriesProgress] =
+  const [seasonEpisodes, seriesProgress] =
     mediaType === "tv" && season !== null && episode !== null
       ? await Promise.all([
-          getEpisodeInfo(id, season, episode),
+          getSeasonEpisodes(id, season),
           Promise.resolve(
             getSeriesProgressSummary(profileId, id, season, maxEpisode),
           ),
         ])
       : [null, null];
+  const episodeInfo =
+    seasonEpisodes?.find((item) => item.episodeNumber === episode) ?? null;
 
   return (
     <WatchExperience
@@ -93,9 +96,11 @@ export default async function WatchPage({ params, searchParams }: PageProps) {
       initialProgress={progress}
       initialLiked={hasLike(profileId, id, mediaType)}
       initialDisliked={hasDislike(profileId, id, mediaType)}
+      initialWatchlisted={hasWatchlist(profileId, id, mediaType)}
       initialSeason={season}
       initialEpisode={episode}
       initialEpisodeInfo={episodeInfo}
+      initialSeasonEpisodes={seasonEpisodes ?? []}
       initialSeriesProgress={seriesProgress}
     />
   );

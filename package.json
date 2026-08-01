@@ -4,9 +4,12 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --experimental-loader ./tests/alias-loader.mjs --test tests/*.test.mjs",
+    "db:migrate:watch-tracking": "node --experimental-strip-types scripts/migrate-watch-tracking.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.1",
