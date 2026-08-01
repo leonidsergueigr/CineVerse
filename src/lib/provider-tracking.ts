@@ -18,6 +18,16 @@ export type ProviderPlaybackSignal = {
   trackingMethod?: TrackingMethod;
   observerSessionId?: string;
   observerSequence?: number;
+  eventName?: string;
+  bufferingCount?: number;
+  bufferingSeconds?: number;
+  seekCount?: number;
+  seekFromSeconds?: number | null;
+  seekToSeconds?: number | null;
+  startupMilliseconds?: number | null;
+  videoHeight?: number;
+  providerError?: boolean;
+  errorCount?: number;
 };
 
 export const CINEVERSE_COMPANION_SOURCE = "cineverse-companion";
@@ -174,6 +184,16 @@ export function parseCineVerseCompanionMessage(
     trackingMethod: "browser-extension",
     observerSessionId: String(payload.observerInstanceId ?? "").slice(0, 96),
     observerSequence: Math.floor(finiteNumber(payload.sequence)),
+    eventName: String(payload.eventName ?? "").slice(0, 40),
+    bufferingCount: Math.floor(finiteNumber(payload.bufferingCount)),
+    bufferingSeconds: finiteNumber(payload.bufferingSeconds),
+    seekCount: Math.floor(finiteNumber(payload.seekCount)),
+    seekFromSeconds: optionalFiniteNumber(payload.seekFromSeconds),
+    seekToSeconds: optionalFiniteNumber(payload.seekToSeconds),
+    startupMilliseconds: optionalFiniteNumber(payload.startupMilliseconds),
+    videoHeight,
+    providerError: payload.providerError === true,
+    errorCount: Math.floor(finiteNumber(payload.errorCount)),
   };
 }
 
@@ -213,6 +233,12 @@ function recordOrNull(value: unknown) {
 function finiteNumber(value: unknown) {
   const number = Number(value);
   return Number.isFinite(number) ? Math.max(0, number) : 0;
+}
+
+function optionalFiniteNumber(value: unknown) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, number) : null;
 }
 
 function isPlausibleRuntime(duration: number, expectedDuration: number) {

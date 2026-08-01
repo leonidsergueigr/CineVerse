@@ -1,12 +1,39 @@
 const INPUT_CHANNEL = "cineverse-media-observer-v1";
 const OUTPUT_CHANNEL = "cineverse-companion-bridge-v1";
 const POPUP_CHANNEL = "cineverse-companion-popup-v1";
+const COMMAND_CHANNEL = "cineverse-companion-command-v1";
 const candidatesByTab = new Map();
 const activeCandidateByTab = new Map();
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.channel === POPUP_CHANNEL && message?.kind === "get-status") {
     sendResponse(statusForTab(Number(message.tabId)));
+    return;
+  }
+  if (
+    message?.channel === COMMAND_CHANNEL &&
+    message?.kind === "player-command" &&
+    sender.tab?.id
+  ) {
+    const tabId = sender.tab.id;
+    const active = activeCandidateByTab.get(tabId);
+    const candidate = active
+      ? candidatesByTab.get(tabId)?.get(active.key)
+      : undefined;
+    if (candidate) {
+      chrome.tabs.sendMessage(
+        tabId,
+        {
+          channel: INPUT_CHANNEL,
+          kind: "player-command",
+          payload: {
+            ...message.payload,
+            mediaElementId: candidate.payload?.mediaElementId,
+          },
+        },
+        { frameId: candidate.frameId },
+      ).catch(() => undefined);
+    }
     return;
   }
   if (

@@ -55,6 +55,14 @@ export type WatchHeartbeat = WatchSessionIdentity & {
   providerObserverSequence?: number | null;
   trackingMethod?: TrackingMethod;
   heartbeatId?: string;
+  providerEventName?: string;
+  providerBufferingCount?: number | null;
+  providerBufferingSeconds?: number | null;
+  providerSeekCount?: number | null;
+  providerStartupMilliseconds?: number | null;
+  providerVideoHeight?: number | null;
+  providerError?: boolean;
+  providerErrorCount?: number | null;
 };
 
 export type WatchSessionSnapshot = {
@@ -70,6 +78,13 @@ export type WatchSessionSnapshot = {
   durationSeconds: number;
   manuallyMarkedWatched: boolean;
   trackingMethod: TrackingMethod;
+  bufferingCount: number;
+  bufferingSeconds: number;
+  seekCount: number;
+  errorCount: number;
+  startupMilliseconds: number | null;
+  videoHeight: number;
+  providerEndedSignal: boolean;
 };
 
 type SessionRow = {
@@ -100,6 +115,13 @@ type SessionRow = {
   status: WatchSessionStatus;
   last_document_visible: 0 | 1;
   last_playback_state: string;
+  buffering_count: number;
+  buffering_seconds: number;
+  seek_count: number;
+  error_count: number;
+  startup_milliseconds: number | null;
+  video_height: number;
+  provider_ended_signal: 0 | 1;
 };
 
 export function startWatchSession(
@@ -352,7 +374,24 @@ export function heartbeatWatchSession(
           last_document_visible = @documentVisible,
           last_playback_state = @playbackState,
           provider_id = @providerId,
-          audio_language = @audioLanguage
+          audio_language = @audioLanguage,
+          first_play_at = case
+            when @playbackState = 'playing' then coalesce(first_play_at, @now)
+            else first_play_at end,
+          startup_milliseconds = case
+            when @playbackState = 'playing' then coalesce(
+              startup_milliseconds,
+              @providerStartupMilliseconds,
+              max(0, @now - started_at)
+            ) else startup_milliseconds end,
+          buffering_count = max(buffering_count, @providerBufferingCount),
+          buffering_seconds = max(buffering_seconds, @providerBufferingSeconds),
+          seek_count = max(seek_count, @providerSeekCount),
+          error_count = max(error_count, @providerErrorCount),
+          last_provider_seeking = @providerSeeking,
+          last_event_name = @providerEventName,
+          video_height = max(video_height, @providerVideoHeight),
+          provider_ended_signal = max(provider_ended_signal, @providerEnded)
         where id = @sessionId and profile_id = @profileId
       `,
       )
@@ -378,6 +417,20 @@ export function heartbeatWatchSession(
         playbackState: input.playbackState ?? "unknown",
         providerId: normalizeText(input.providerId, 80),
         audioLanguage: normalizeText(input.audioLanguage, 24),
+        providerStartupMilliseconds: positiveIntegerOrNull(
+          input.providerStartupMilliseconds,
+        ),
+        providerBufferingCount: nonNegativeInteger(input.providerBufferingCount),
+        providerBufferingSeconds: nonNegativeInteger(input.providerBufferingSeconds),
+        providerSeekCount: nonNegativeInteger(input.providerSeekCount),
+        providerErrorCount: Math.max(
+          nonNegativeInteger(input.providerErrorCount),
+          input.providerError ? 1 : 0,
+        ),
+        providerSeeking: input.providerSeeking ? 1 : 0,
+        providerEventName: normalizeText(input.providerEventName, 40),
+        providerVideoHeight: nonNegativeInteger(input.providerVideoHeight),
+        providerEnded: input.providerEnded ? 1 : 0,
         sessionId: input.sessionId,
         profileId,
       });
@@ -677,6 +730,13 @@ function snapshot(row: SessionRow, progress: WatchProgress | null): WatchSession
     durationSeconds: progress?.durationSeconds ?? row.official_runtime_seconds ?? 0,
     manuallyMarkedWatched: Boolean(row.manually_marked_watched),
     trackingMethod: row.tracking_method ?? "unknown",
+    bufferingCount: row.buffering_count ?? 0,
+    bufferingSeconds: row.buffering_seconds ?? 0,
+    seekCount: row.seek_count ?? 0,
+    errorCount: row.error_count ?? 0,
+    startupMilliseconds: row.startup_milliseconds ?? null,
+    videoHeight: row.video_height ?? 0,
+    providerEndedSignal: Boolean(row.provider_ended_signal),
   };
 }
 
@@ -699,6 +759,13 @@ function snapshotWithoutSession(
     durationSeconds: progress?.durationSeconds ?? 0,
     manuallyMarkedWatched: false,
     trackingMethod: "unknown",
+    bufferingCount: 0,
+    bufferingSeconds: 0,
+    seekCount: 0,
+    errorCount: 0,
+    startupMilliseconds: null,
+    videoHeight: 0,
+    providerEndedSignal: false,
   };
 }
 

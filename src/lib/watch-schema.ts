@@ -2,6 +2,7 @@ import type Database from "better-sqlite3";
 
 const HYBRID_TRACKING_MIGRATION = "hybrid-watch-tracking-v1";
 const BROWSER_EXTENSION_TRACKING_MIGRATION = "browser-extension-tracking-v2";
+const PLAYBACK_INTELLIGENCE_MIGRATION = "playback-intelligence-v3";
 
 export function applyWatchTrackingSchema(database: Database.Database) {
   database.exec(`
@@ -56,6 +57,52 @@ export function applyWatchTrackingSchema(database: Database.Database) {
         profile_id, media_type, tmdb_id, season_number, episode_number,
         started_at desc
       );
+
+    create table if not exists profile_playback_preferences (
+      profile_id text primary key,
+      auto_next_enabled integer not null default 1,
+      binge_limit_episodes integer not null default 4,
+      intro_skip_enabled integer not null default 1,
+      session_summary_enabled integer not null default 1,
+      updated_at integer not null
+    );
+
+    create table if not exists playback_observations (
+      id integer primary key autoincrement,
+      observation_key text not null unique,
+      profile_id text not null,
+      session_id text not null,
+      tmdb_id integer not null,
+      season_number integer not null,
+      episode_number integer not null,
+      observation_type text not null check (observation_type in ('intro', 'credits')),
+      from_seconds real not null default 0,
+      to_seconds real not null default 0,
+      duration_seconds real not null default 0,
+      remaining_seconds real not null default 0,
+      observed_at integer not null
+    );
+
+    create index if not exists playback_observations_learning
+      on playback_observations(
+        profile_id, tmdb_id, season_number, observation_type, observed_at desc
+      );
+
+    create table if not exists learned_playback_segments (
+      id integer primary key autoincrement,
+      profile_id text not null,
+      tmdb_id integer not null,
+      season_number integer not null,
+      segment_type text not null check (segment_type in ('intro', 'credits')),
+      start_seconds real not null default 0,
+      end_seconds real not null default 0,
+      remaining_seconds real not null default 0,
+      sample_count integer not null default 0,
+      confidence real not null default 0,
+      disabled integer not null default 0,
+      updated_at integer not null,
+      unique(profile_id, tmdb_id, season_number, segment_type)
+    );
   `);
 
   ensureColumn(database, "watch_history", "completion_source", "text not null default 'unknown'");
@@ -93,6 +140,16 @@ export function applyWatchTrackingSchema(database: Database.Database) {
     "tracking_method",
     "text not null default 'local-estimate'",
   );
+  ensureColumn(database, "watch_sessions", "first_play_at", "integer");
+  ensureColumn(database, "watch_sessions", "startup_milliseconds", "integer");
+  ensureColumn(database, "watch_sessions", "buffering_count", "integer not null default 0");
+  ensureColumn(database, "watch_sessions", "buffering_seconds", "integer not null default 0");
+  ensureColumn(database, "watch_sessions", "seek_count", "integer not null default 0");
+  ensureColumn(database, "watch_sessions", "error_count", "integer not null default 0");
+  ensureColumn(database, "watch_sessions", "last_provider_seeking", "integer not null default 0");
+  ensureColumn(database, "watch_sessions", "last_event_name", "text not null default ''");
+  ensureColumn(database, "watch_sessions", "video_height", "integer not null default 0");
+  ensureColumn(database, "watch_sessions", "provider_ended_signal", "integer not null default 0");
   database.exec(`
     create unique index if not exists viewing_events_idempotency
       on viewing_events(profile_id, idempotency_key)
@@ -128,6 +185,15 @@ export function applyWatchTrackingSchema(database: Database.Database) {
     database
       .prepare("insert into app_migrations (id, applied_at) values (?, ?)")
       .run(BROWSER_EXTENSION_TRACKING_MIGRATION, Date.now());
+  }
+
+  const intelligenceApplied = database
+    .prepare("select 1 from app_migrations where id = ? limit 1")
+    .get(PLAYBACK_INTELLIGENCE_MIGRATION);
+  if (!intelligenceApplied) {
+    database
+      .prepare("insert into app_migrations (id, applied_at) values (?, ?)")
+      .run(PLAYBACK_INTELLIGENCE_MIGRATION, Date.now());
   }
 }
 

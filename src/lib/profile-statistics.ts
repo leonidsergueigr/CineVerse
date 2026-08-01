@@ -2,7 +2,11 @@ import "server-only";
 
 import { GENRES, SERIES_GENRES } from "@/lib/genres";
 import { getDb, getProfile } from "@/lib/store";
-import { completionSignalWeight, type CompletionSource } from "@/lib/watch-tracking";
+import {
+  completionSignalWeight,
+  TRACKING_CONFIG,
+  type CompletionSource,
+} from "@/lib/watch-tracking";
 import type {
   MediaType,
   ProfileStats,
@@ -44,6 +48,17 @@ type HistoryRow = {
   completion_source: CompletionSource;
   series_episode_counts: string;
   updated_at: string;
+};
+
+type TrackingSessionRow = {
+  id: string;
+  startedAt: number;
+  lastHeartbeatAt: number;
+  providerWatchedSeconds: number;
+  estimatedWatchedSeconds: number;
+  trackingMethod: string;
+  errorCount: number;
+  lastEventName: string;
 };
 
 const DAY_NAMES = [
@@ -91,6 +106,20 @@ export function getProfileStats(profileId: string): ProfileStats {
     `,
     )
     .all(profileId) as HistoryRow[];
+  const trackingSessions = getDb()
+    .prepare(
+      `
+      select id, started_at as startedAt,
+        last_heartbeat_at as lastHeartbeatAt,
+        provider_watched_seconds as providerWatchedSeconds,
+        estimated_watched_seconds as estimatedWatchedSeconds,
+        tracking_method as trackingMethod, error_count as errorCount,
+        last_event_name as lastEventName
+      from watch_sessions
+      where profile_id = ?
+    `,
+    )
+    .all(profileId) as TrackingSessionRow[];
 
   const offset = events.at(-1)?.timezoneOffsetMinutes ?? 0;
   const now = Date.now();
@@ -166,6 +195,30 @@ export function getProfileStats(profileId: string): ProfileStats {
   const untrackedStarts = [...startedSessionKeys].filter(
     (sessionId) => (sessionTotals.get(sessionId) ?? 0) === 0,
   ).length;
+  const sessionRows = new Map(trackingSessions.map((row) => [row.id, row]));
+  const untrackedReasonCounts = new Map<
+    ProfileStats["tracking"]["untrackedReasons"][number]["id"],
+    number
+  >();
+  [...startedSessionKeys]
+    .filter((sessionId) => (sessionTotals.get(sessionId) ?? 0) === 0)
+    .forEach((sessionId) => {
+      const reason = untrackedReason(sessionRows.get(sessionId));
+      add(untrackedReasonCounts, reason, 1);
+    });
+  const trackedSeconds = confirmedWatchSeconds + estimatedWatchSeconds;
+  const confirmedRatio = trackedSeconds > 0
+    ? confirmedWatchSeconds / trackedSeconds
+    : 0;
+  const untrackedRatio = startedSessionKeys.size
+    ? untrackedStarts / startedSessionKeys.size
+    : 0;
+  const dataQuality: ProfileStats["tracking"]["dataQuality"] =
+    confirmedRatio >= 0.8 && untrackedRatio <= 0.1
+      ? "high"
+      : confirmedRatio >= 0.35 && untrackedRatio <= 0.5
+        ? "medium"
+        : "low";
   const averageSessionSeconds = measuredSessions.length
     ? Math.round(sum(measuredSessions) / measuredSessions.length)
     : 0;
@@ -275,6 +328,10 @@ export function getProfileStats(profileId: string): ProfileStats {
       estimatedWatchSeconds,
       manualCompletions,
       automaticCompletions,
+      dataQuality,
+      untrackedReasons: [...untrackedReasonCounts.entries()]
+        .map(([id, count]) => ({ id, label: untrackedReasonLabel(id), count }))
+        .sort((left, right) => right.count - left.count),
     },
     overview: {
       totalWatchSeconds,
@@ -670,12 +727,7 @@ function seriesLoyaltyStats(
   seriesGroups: ReturnType<typeof buildSeriesGroups>,
   abandoned: ReturnType<typeof likelyAbandoned>,
 ): ProfileStats["intelligence"]["seriesLoyalty"] {
-  const knownSeries = seriesGroups.filter(
-    (series) => series.totalEpisodes > 0,
-  );
-  const completedSeries = knownSeries.filter(
-    (series) => series.completedEpisodes >= series.totalEpisodes,
-  ).length;
+  const continuationRate = seriesContinuationRate(history);
   const episodesBySeries = new Map<
     number,
     { title: string; episodes: Map<string, number> }
@@ -751,9 +803,7 @@ function seriesLoyaltyStats(
   )[0];
 
   return {
-    completionRate: knownSeries.length
-      ? Math.round((completedSeries / knownSeries.length) * 100)
-      : null,
+    completionRate: continuationRate,
     mostRegularTitle: mostRegular?.title ?? null,
     averageGapDays: allGaps.length
       ? roundTo(sum(allGaps.map((gap) => gap.days)) / allGaps.length, 1)
@@ -769,6 +819,95 @@ function seriesLoyaltyStats(
   };
 }
 
+function seriesContinuationRate(history: HistoryRow[]) {
+  const bySeries = new Map<number, HistoryRow[]>();
+  history
+    .filter(
+      (item) =>
+        item.media_type === "tv" &&
+        item.season_number !== null &&
+        item.episode_number !== null &&
+        (item.progress_seconds > 0 || item.completed),
+    )
+    .forEach((item) => {
+      const rows = bySeries.get(item.tmdb_id) ?? [];
+      rows.push(item);
+      bySeries.set(item.tmdb_id, rows);
+    });
+
+  let opportunities = 0;
+  let continued = 0;
+  bySeries.forEach((rows) => {
+    const counts = rows
+      .map((row) => parseEpisodeCounts(row.series_episode_counts))
+      .find((value) => value.length > 0);
+    if (!counts?.length) return;
+    const watched = new Set(
+      rows.map((row) => `${row.season_number}:${row.episode_number}`),
+    );
+    watched.forEach((key) => {
+      const [seasonNumber, episodeNumber] = key.split(":").map(Number);
+      const currentSeason = counts.find(
+        (season) => season.seasonNumber === seasonNumber,
+      );
+      let nextKey = "";
+      if (currentSeason && episodeNumber < currentSeason.episodeCount) {
+        nextKey = `${seasonNumber}:${episodeNumber + 1}`;
+      } else {
+        const nextSeason = counts
+          .filter((season) => season.seasonNumber > seasonNumber)
+          .sort((left, right) => left.seasonNumber - right.seasonNumber)[0];
+        if (nextSeason) nextKey = `${nextSeason.seasonNumber}:1`;
+      }
+      if (!nextKey) return;
+      opportunities += 1;
+      if (watched.has(nextKey)) continued += 1;
+    });
+  });
+  return opportunities > 0
+    ? Math.round((continued / opportunities) * 100)
+    : null;
+}
+
+function untrackedReason(
+  session: TrackingSessionRow | undefined,
+): ProfileStats["tracking"]["untrackedReasons"][number]["id"] {
+  if (!session) return "unknown";
+  if (session.errorCount > 0 || session.lastEventName === "error") {
+    return "provider-error";
+  }
+  if (session.lastHeartbeatAt - session.startedAt < 15_000) {
+    return "session-too-short";
+  }
+  if (
+    session.trackingMethod === "browser-extension" &&
+    session.providerWatchedSeconds <= 0
+  ) {
+    return "media-not-detected";
+  }
+  if (
+    session.trackingMethod === "local-estimate" ||
+    session.trackingMethod === "unknown"
+  ) {
+    return "extension-absent";
+  }
+  return "unknown";
+}
+
+function untrackedReasonLabel(
+  id: ProfileStats["tracking"]["untrackedReasons"][number]["id"],
+) {
+  const labels = {
+    "extension-absent": "Extension absente ou inactive",
+    "media-not-detected": "Aucun media exploitable detecte",
+    "session-too-short": "Session trop courte",
+    "provider-error": "Erreur du provider",
+    "provider-changed": "Provider change pendant la lecture",
+    unknown: "Cause indeterminee",
+  } as const;
+  return labels[id];
+}
+
 function selectionStats(
   events: EventRow[],
 ): ProfileStats["intelligence"]["selection"] {
@@ -781,7 +920,8 @@ function selectionStats(
     const context = events.filter(
       (event) =>
         event.occurredAt <= play.occurredAt &&
-        play.occurredAt - event.occurredAt <= 2 * 60 * 60 * 1000 &&
+        play.occurredAt - event.occurredAt <=
+          TRACKING_CONFIG.maximumActiveDecisionSeconds * 1000 &&
         [
           "SEARCHED",
           "FILTER_APPLIED",
@@ -792,7 +932,15 @@ function selectionStats(
     detailCounts.push(
       context.filter((event) => event.eventType === "VIEW_DETAILS").length,
     );
-    const first = context[0];
+    const activeContext = [...context]
+      .sort((left, right) => right.occurredAt - left.occurredAt)
+      .reduce<EventRow[]>((chain, event) => {
+        const previous = chain.at(-1)?.occurredAt ?? play.occurredAt;
+        if (previous - event.occurredAt > 5 * 60 * 1000) return chain;
+        chain.push(event);
+        return chain;
+      }, []);
+    const first = activeContext.at(-1);
     if (first) decisionTimes.push(play.occurredAt - first.occurredAt);
   }
 

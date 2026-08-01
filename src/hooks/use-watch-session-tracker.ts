@@ -91,6 +91,14 @@ export function useWatchSessionTracker({
         providerObserverSessionId: signal.observerSessionId ?? null,
         providerObserverSequence: signal.observerSequence ?? null,
         trackingMethod: signal.trackingMethod ?? "local-estimate",
+        providerEventName: signal.eventName ?? "",
+        providerBufferingCount: signal.bufferingCount ?? 0,
+        providerBufferingSeconds: signal.bufferingSeconds ?? 0,
+        providerSeekCount: signal.seekCount ?? 0,
+        providerStartupMilliseconds: signal.startupMilliseconds ?? null,
+        providerVideoHeight: signal.videoHeight ?? 0,
+        providerError: signal.providerError === true,
+        providerErrorCount: signal.errorCount ?? 0,
       });
     },
     [request],
@@ -145,6 +153,18 @@ export function useWatchSessionTracker({
             providerSignalIsFresh
               ? signal?.trackingMethod ?? "local-estimate"
               : "local-estimate",
+          providerEventName: providerSignalIsFresh ? signal?.eventName ?? "" : "",
+          providerBufferingCount:
+            providerSignalIsFresh ? signal?.bufferingCount ?? 0 : 0,
+          providerBufferingSeconds:
+            providerSignalIsFresh ? signal?.bufferingSeconds ?? 0 : 0,
+          providerSeekCount: providerSignalIsFresh ? signal?.seekCount ?? 0 : 0,
+          providerStartupMilliseconds:
+            providerSignalIsFresh ? signal?.startupMilliseconds ?? null : null,
+          providerVideoHeight: providerSignalIsFresh ? signal?.videoHeight ?? 0 : 0,
+          providerError: providerSignalIsFresh && signal?.providerError === true,
+          providerErrorCount:
+            providerSignalIsFresh ? signal?.errorCount ?? 0 : 0,
         }),
       );
     }

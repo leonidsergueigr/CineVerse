@@ -78,17 +78,33 @@ export function ProfileStatsDashboard({ stats }: { stats: ProfileStats }) {
         {tracking.isPartial || tracking.estimatedWatchSeconds > 0 ? (
           <div className="mb-7 flex items-start gap-3 rounded border border-amber-400/25 bg-amber-400/[0.07] p-4 text-sm text-zinc-300">
             <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
-            <p className="leading-6">
-              {tracking.confirmedWatchSeconds > 0
-                ? `${formatDuration(tracking.confirmedWatchSeconds)} confirmes par le lecteur ou l'extension. `
-                : ""}
-              {tracking.estimatedWatchSeconds > 0
-                ? `${formatDuration(tracking.estimatedWatchSeconds)} proviennent encore du suivi estime. `
-                : ""}
-              {tracking.untrackedStarts > 0
-                ? `${tracking.untrackedStarts} lancement${tracking.untrackedStarts > 1 ? "s" : ""} sans mesure exploitable.`
-                : ""}
-            </p>
+            <div className="min-w-0 leading-6">
+              <p>
+                <strong className="text-white">
+                  Qualite des donnees : {qualityLabel(tracking.dataQuality)}.
+                </strong>{" "}
+                Une partie de votre activite a ete estimee.
+              </p>
+              <details className="mt-2 text-xs text-zinc-400">
+                <summary className="cursor-pointer font-bold text-zinc-300">
+                  Voir les details
+                </summary>
+                <div className="mt-2 space-y-1 border-l border-white/10 pl-3">
+                  <p>
+                    Confirme : {formatDuration(tracking.confirmedWatchSeconds)}
+                  </p>
+                  <p>
+                    Estime : {formatDuration(tracking.estimatedWatchSeconds)}
+                  </p>
+                  <p>Marquages manuels : {tracking.manualCompletions}</p>
+                  {tracking.untrackedReasons.map((reason) => (
+                    <p key={reason.id}>
+                      {reason.label} : {reason.count}
+                    </p>
+                  ))}
+                </div>
+              </details>
+            </div>
           </div>
         ) : null}
 
@@ -409,14 +425,14 @@ export function ProfileStatsDashboard({ stats }: { stats: ProfileStats }) {
               ) : null}
             </InsightPanel>
 
-            <InsightPanel icon={Repeat2} title="Fidelite aux series">
+            <InsightPanel icon={Repeat2} title="Continuation des series">
               <PrimaryInsight
                 value={
                   intelligence.seriesLoyalty.completionRate === null
                     ? "A determiner"
                     : `${intelligence.seriesLoyalty.completionRate} %`
                 }
-                label="des series avec un total connu sont terminees"
+                label="des episodes disponibles sont suivis par le suivant"
               />
               <MetricLine
                 label="Serie la plus reguliere"
@@ -868,6 +884,10 @@ function formatDuration(seconds: number) {
 
 function measuredDuration(seconds: number, measuredSessions: number) {
   return measuredSessions > 0 ? formatDuration(seconds) : "-";
+}
+
+function qualityLabel(value: ProfileStats["tracking"]["dataQuality"]) {
+  return value === "high" ? "elevee" : value === "medium" ? "moyenne" : "faible";
 }
 
 function formatElapsed(seconds: number) {

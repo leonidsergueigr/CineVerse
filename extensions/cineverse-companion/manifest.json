@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CineVerse Companion",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Transmet a CineVerse la progression reelle des lecteurs video autorises.",
   "background": {
     "service_worker": "service-worker.js"

@@ -470,6 +470,15 @@ export function deleteProfile(profileId: string) {
     database
       .prepare("delete from watch_sessions where profile_id = ?")
       .run(profileId);
+    database
+      .prepare("delete from profile_playback_preferences where profile_id = ?")
+      .run(profileId);
+    database
+      .prepare("delete from playback_observations where profile_id = ?")
+      .run(profileId);
+    database
+      .prepare("delete from learned_playback_segments where profile_id = ?")
+      .run(profileId);
     database.prepare("delete from user_likes where user_id = ?").run(profileId);
     database.prepare("delete from user_dislikes where user_id = ?").run(profileId);
     database.prepare("delete from user_watchlist where user_id = ?").run(profileId);
@@ -848,7 +857,10 @@ export function getContinueWatching(
   return [...grouped.values()]
     .map(resolveContinueWatching)
     .filter((progress): progress is WatchProgress => Boolean(progress))
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    .sort((left, right) => {
+      const priorityDifference = resumePriority(left) - resumePriority(right);
+      return priorityDifference || right.updatedAt.localeCompare(left.updatedAt);
+    })
     .slice(0, limit);
 }
 
@@ -863,15 +875,30 @@ export function getRecommendationLikes(
   const completed = getDb()
     .prepare(
       `
-      select tmdb_id as tmdbId, media_type as mediaType, title,
-        poster_path as posterPath, backdrop_path as backdropPath,
-        updated_at as likedAt, completion_source as completionSource
-      from watch_history
-      where user_id = ? and completed = 1
-      order by datetime(updated_at) desc, id desc
+      select history.tmdb_id as tmdbId, history.media_type as mediaType,
+        history.title, history.poster_path as posterPath,
+        history.backdrop_path as backdropPath,
+        history.updated_at as likedAt,
+        history.completion_source as completionSource,
+        coalesce(metrics.completedSessions, 0) as completedSessions,
+        coalesce(metrics.rewatchSessions, 0) as rewatchSessions
+      from watch_history history
+      left join (
+        select tmdb_id, media_type,
+          sum(case when completed = 1 then 1 else 0 end) as completedSessions,
+          sum(rewatch) as rewatchSessions
+        from watch_sessions
+        where profile_id = ?
+        group by tmdb_id, media_type
+      ) metrics on metrics.tmdb_id = history.tmdb_id
+        and metrics.media_type = history.media_type
+      where history.user_id = ? and history.completed = 1
+      order by datetime(history.updated_at) desc, history.id desc
     `,
     )
-    .all(profileId) as LikeRecord[];
+    .all(profileId, profileId) as Array<
+      LikeRecord & { completedSessions: number; rewatchSessions: number }
+    >;
 
   for (const item of completed) {
     const key = `${item.mediaType}:${item.tmdbId}`;
@@ -879,8 +906,11 @@ export function getRecommendationLikes(
     explicitLikes.push({
       ...item,
       signalOrigin: "completed",
-      signalStrength: completionSignalWeight(
-        item.completionSource ?? "unknown",
+      signalStrength: Math.min(
+        1.25,
+        completionSignalWeight(item.completionSource ?? "unknown") +
+          (item.rewatchSessions > 0 ? 0.2 : 0) +
+          (item.mediaType === "tv" && item.completedSessions >= 3 ? 0.12 : 0),
       ),
     });
     seen.add(key);
@@ -1467,14 +1497,14 @@ function resolveContinueWatching(rows: DbProgress[]) {
   const latest = rows[0];
   if (!latest) return null;
   if (latest.media_type === "movie") {
-    return latest.completed ? null : mapProgress(latest);
+    return latest.completed ? null : annotateResume(mapProgress(latest));
   }
 
   const episodeCounts =
     rows.map((row) => parseEpisodeCounts(row.series_episode_counts))
       .find((counts) => counts.length > 0) ?? [];
   const latestIncomplete = rows.find((row) => !row.completed);
-  if (latestIncomplete) return mapProgress(latestIncomplete);
+  if (latestIncomplete) return annotateResume(mapProgress(latestIncomplete));
   if (!episodeCounts.length) return null;
 
   const completedEpisodes = new Set(
@@ -1501,7 +1531,7 @@ function resolveContinueWatching(rows: DbProgress[]) {
   );
   if (!nextEpisode) return null;
 
-  return {
+  return annotateResume({
     ...mapProgress(latest),
     seasonNumber: nextEpisode.seasonNumber,
     episodeNumber: nextEpisode.episodeNumber,
@@ -1509,7 +1539,68 @@ function resolveContinueWatching(rows: DbProgress[]) {
     durationSeconds: 0,
     completed: false,
     seriesEpisodeCounts: episodeCounts,
+  }, "next-episode");
+}
+
+function annotateResume(
+  progress: WatchProgress,
+  forcedKind?: NonNullable<WatchProgress["resumeKind"]>,
+): WatchProgress {
+  const remainingSeconds = progress.durationSeconds > 0
+    ? Math.max(0, progress.durationSeconds - progress.progressSeconds)
+    : undefined;
+  const inactiveDays = Math.max(
+    0,
+    (Date.now() - new Date(progress.updatedAt).getTime()) / 86_400_000,
+  );
+  const kind = forcedKind ??
+    (inactiveDays >= 14 && progress.mediaType === "tv"
+      ? "returning-series"
+      : remainingSeconds !== undefined &&
+          remainingSeconds > 0 &&
+          remainingSeconds <= 20 * 60
+        ? "almost-finished"
+        : "continue-now");
+  const episodeLabel =
+    progress.mediaType === "tv" &&
+    progress.seasonNumber &&
+    progress.episodeNumber
+      ? `S${progress.seasonNumber} E${progress.episodeNumber}`
+      : "Film";
+  const resumeLabel = kind === "next-episode"
+    ? `${episodeLabel} · Episode suivant`
+    : kind === "returning-series"
+      ? `${episodeLabel} · Reprendre apres ${Math.floor(inactiveDays)} jours`
+      : kind === "almost-finished" && remainingSeconds !== undefined
+        ? `${episodeLabel} · ${Math.max(1, Math.ceil(remainingSeconds / 60))} min restantes`
+        : `${episodeLabel} · Reprendre a ${formatResumeTime(progress.progressSeconds)}`;
+  return {
+    ...progress,
+    resumeKind: kind,
+    resumeLabel,
+    remainingSeconds,
   };
+}
+
+function resumePriority(progress: WatchProgress) {
+  const priorities: Record<string, number> = {
+    "continue-now": 0,
+    "almost-finished": 1,
+    "next-episode": 2,
+    "returning-series": 3,
+    rewatch: 4,
+  };
+  return priorities[progress.resumeKind ?? "continue-now"] ?? 5;
+}
+
+function formatResumeTime(seconds: number) {
+  const total = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const remainder = total % 60;
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`
+    : `${minutes}:${String(remainder).padStart(2, "0")}`;
 }
 
 function isPlaybackComplete(input: ProgressInput) {

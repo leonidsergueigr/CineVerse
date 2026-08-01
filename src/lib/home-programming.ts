@@ -67,8 +67,8 @@ export function composeHomeProgramming({
       title:
         continueWatching.length === 1
           ? `Continuer ${continueWatching[0].title}`
-          : "Reprendre la lecture",
-      reason: "Vos lectures en cours, au bon episode.",
+          : "Reprendre intelligemment",
+      reason: "Reprises recentes, fins proches et prochains episodes, classes pour maintenant.",
       items: continueWatching,
       priority: 120,
     });

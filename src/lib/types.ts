@@ -28,6 +28,15 @@ export type CatalogItem = {
     episodeNumber: number | null;
     progressSeconds: number;
     durationSeconds: number;
+    kind?:
+      | "continue-now"
+      | "almost-finished"
+      | "next-episode"
+      | "returning-series"
+      | "rewatch";
+    label?: string;
+    remainingSeconds?: number;
+    updatedAt?: string;
   };
 };
 
@@ -109,6 +118,42 @@ export type WatchProgress = {
     episodeCount: number;
   }>;
   updatedAt: string;
+  resumeKind?: NonNullable<CatalogItem["resume"]>["kind"];
+  resumeLabel?: string;
+  remainingSeconds?: number;
+};
+
+export type PlaybackPreferences = {
+  autoNextEnabled: boolean;
+  bingeLimitEpisodes: number;
+  introSkipEnabled: boolean;
+  sessionSummaryEnabled: boolean;
+};
+
+export type LearnedPlaybackSegment = {
+  tmdbId: number;
+  seasonNumber: number;
+  segmentType: "intro" | "credits";
+  startSeconds: number;
+  endSeconds: number;
+  remainingSeconds: number;
+  sampleCount: number;
+  confidence: number;
+  disabled: boolean;
+};
+
+export type ProviderPerformance = {
+  providerId: string;
+  score: number;
+  sampleCount: number;
+  startupSuccessPercent: number;
+  averageStartupMs: number | null;
+  bufferingCount: number;
+  bufferingSeconds: number;
+  errorCount: number;
+  completionPercent: number;
+  preciseTrackingPercent: number;
+  lastUsedAt: number | null;
 };
 
 export type EpisodeInfo = {
@@ -195,6 +240,18 @@ export type ProfileStats = {
     estimatedWatchSeconds: number;
     manualCompletions: number;
     automaticCompletions: number;
+    dataQuality: "high" | "medium" | "low";
+    untrackedReasons: Array<{
+      id:
+        | "extension-absent"
+        | "media-not-detected"
+        | "session-too-short"
+        | "provider-error"
+        | "provider-changed"
+        | "unknown";
+      label: string;
+      count: number;
+    }>;
   };
   overview: {
     totalWatchSeconds: number;
@@ -354,6 +411,7 @@ export type EmbedProvider = {
     score: number;
     lastCheckedAt: string | null;
   };
+  performance?: ProviderPerformance;
   languages?: Array<{ id: string; label: string }>;
   customizationOptions?: {
     autoplay?: string;

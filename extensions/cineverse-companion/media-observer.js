@@ -17,6 +17,7 @@ const IMMEDIATE_EVENTS = new Set([
   "loadedmetadata",
   "durationchange",
   "ratechange",
+  "error",
 ]);
 
 const observer = new MutationObserver((mutations) => {
@@ -41,6 +42,26 @@ document.addEventListener("visibilitychange", () => {
 window.addEventListener("pagehide", () => {
   for (const video of document.querySelectorAll("video")) {
     emit(video, "pagehide", true);
+  }
+});
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.channel !== CHANNEL || message?.kind !== "player-command") {
+    return;
+  }
+  const mediaElementId = String(message.payload?.mediaElementId ?? "");
+  for (const video of document.querySelectorAll("video")) {
+    const state = states.get(video);
+    if (!state || state.id !== mediaElementId) continue;
+    if (message.payload?.action === "seek") {
+      const duration = finiteDuration(video.duration);
+      const target = finite(message.payload?.time);
+      if (duration > 0) video.currentTime = Math.min(duration, target);
+    }
+    if (message.payload?.action === "play") {
+      void video.play().catch(() => undefined);
+    }
+    break;
   }
 });
 
@@ -69,6 +90,15 @@ function attach(video) {
     wasPaused: video.paused,
     wasSeeking: video.seeking,
     wasBuffering: !video.paused && video.readyState < 3,
+    attachedAt: performance.now(),
+    firstPlayedAt: 0,
+    startupMilliseconds: 0,
+    bufferingCount: 0,
+    bufferingSeconds: 0,
+    seekCount: 0,
+    seekFromSeconds: 0,
+    seekToSeconds: 0,
+    errorCount: 0,
     sequence: 0,
   });
 
@@ -105,6 +135,18 @@ function emit(video, eventName, immediate) {
     wallDelta <= maximumSampleGap &&
     playedWallSeconds <= wallDelta + 2.5;
 
+  if (state.wasBuffering && wallDelta <= maximumSampleGap) {
+    state.bufferingSeconds += wallDelta;
+  }
+
+  if (eventName === "seeking" && !state.wasSeeking) {
+    state.seekCount += 1;
+    state.seekFromSeconds = state.lastCurrentTime;
+    state.seekToSeconds = currentTime;
+  } else if (eventName === "seeked") {
+    state.seekToSeconds = currentTime;
+  }
+
   if (
     !state.wasPaused &&
     !state.wasSeeking &&
@@ -120,6 +162,13 @@ function emit(video, eventName, immediate) {
     !video.paused &&
     !video.ended &&
     (eventName === "waiting" || eventName === "stalled" || video.readyState < 3);
+
+  if (buffering && !state.wasBuffering) state.bufferingCount += 1;
+  if ((eventName === "play" || eventName === "playing") && !state.firstPlayedAt) {
+    state.firstPlayedAt = now;
+    state.startupMilliseconds = Math.max(0, now - state.attachedAt);
+  }
+  if (eventName === "error") state.errorCount += 1;
 
   state.lastCurrentTime = currentTime;
   state.lastSampleAt = now;
@@ -152,6 +201,14 @@ function emit(video, eventName, immediate) {
         currentTime,
         duration,
         watchedSeconds: round(state.watchedSeconds),
+        bufferingCount: state.bufferingCount,
+        bufferingSeconds: round(state.bufferingSeconds),
+        seekCount: state.seekCount,
+        seekFromSeconds: round(state.seekFromSeconds),
+        seekToSeconds: round(state.seekToSeconds),
+        startupMilliseconds: Math.round(state.startupMilliseconds),
+        errorCount: state.errorCount,
+        providerError: eventName === "error",
         playbackRate,
         playbackState,
         ended: video.ended || eventName === "ended",

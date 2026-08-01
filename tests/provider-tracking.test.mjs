@@ -15,6 +15,10 @@ test("le compagnon produit un signal video confirme", () => {
       videoWidth: 1_920,
       videoHeight: 1_080,
       observerInstanceId: "observer-1",
+      bufferingCount: 2,
+      bufferingSeconds: 4.5,
+      seekCount: 1,
+      errorCount: 0,
     }),
     1_380,
   );
@@ -24,6 +28,9 @@ test("le compagnon produit un signal video confirme", () => {
   assert.equal(signal.watchedSeconds, 598.5);
   assert.equal(signal.playbackState, "playing");
   assert.equal(signal.observerSessionId, "observer-1");
+  assert.equal(signal.bufferingCount, 2);
+  assert.equal(signal.bufferingSeconds, 4.5);
+  assert.equal(signal.seekCount, 1);
 });
 
 test("une video publicitaire courte est rejetee", () => {

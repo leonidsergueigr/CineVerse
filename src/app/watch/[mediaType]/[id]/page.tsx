@@ -8,6 +8,11 @@ import {
 } from "@/lib/provider-availability";
 import { fstreamSourceAdapter } from "@/lib/fstream";
 import { getEmbedProviders } from "@/lib/providers";
+import {
+  getLearnedPlaybackSegments,
+  getPlaybackPreferences,
+  rankProvidersForProfile,
+} from "@/lib/playback-intelligence";
 import { resolveStreamProviders } from "@/lib/stream-resolver";
 import {
   getProgress,
@@ -72,11 +77,16 @@ export default async function WatchPage({ params, searchParams }: PageProps) {
       episodeNumber: episode,
     },
   );
-  const providers = [
+  const providers = rankProvidersForProfile(profileId, [
     ...providerResolution.providers,
     ...sourceProviders,
-  ].sort((left, right) => left.priority - right.priority);
+  ]);
   const progress = getProgress(profileId, id, mediaType, season, episode);
+  const playbackPreferences = getPlaybackPreferences(profileId);
+  const learnedPlaybackSegments =
+    mediaType === "tv" && season !== null
+      ? getLearnedPlaybackSegments(profileId, id, season)
+      : [];
   const [seasonEpisodes, seriesProgress] =
     mediaType === "tv" && season !== null && episode !== null
       ? await Promise.all([
@@ -102,6 +112,8 @@ export default async function WatchPage({ params, searchParams }: PageProps) {
       initialEpisodeInfo={episodeInfo}
       initialSeasonEpisodes={seasonEpisodes ?? []}
       initialSeriesProgress={seriesProgress}
+      initialPlaybackPreferences={playbackPreferences}
+      initialLearnedPlaybackSegments={learnedPlaybackSegments}
     />
   );
 }

@@ -66,6 +66,10 @@ export default async function Home() {
       episodeNumber: item.episodeNumber,
       progressSeconds: item.progressSeconds,
       durationSeconds: item.durationSeconds,
+      kind: item.resumeKind,
+      label: item.resumeLabel,
+      remainingSeconds: item.remainingSeconds,
+      updatedAt: item.updatedAt,
     },
   }));
   const savedItems = watchlist.map(

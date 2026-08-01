@@ -59,6 +59,16 @@ export async function POST(request: NextRequest) {
                 ? body.trackingMethod
                 : "local-estimate",
               heartbeatId: String(body.heartbeatId ?? ""),
+              providerEventName: String(body.providerEventName ?? ""),
+              providerBufferingCount: finiteNumber(body.providerBufferingCount),
+              providerBufferingSeconds: finiteNumber(body.providerBufferingSeconds),
+              providerSeekCount: finiteNumber(body.providerSeekCount),
+              providerStartupMilliseconds: finiteNumber(
+                body.providerStartupMilliseconds,
+              ),
+              providerVideoHeight: finiteNumber(body.providerVideoHeight),
+              providerError: body.providerError === true,
+              providerErrorCount: finiteNumber(body.providerErrorCount),
             } satisfies WatchHeartbeat)
           : action === "manual-complete"
             ? manuallyCompleteWatchSession(profileId, identity)

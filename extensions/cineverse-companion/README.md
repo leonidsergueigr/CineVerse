@@ -7,6 +7,7 @@ iframes des providers autorises. Elle transmet a l'application :
 - les etats lecture, pause, buffering, seek et fin ;
 - un temps confirme calcule uniquement lorsque la timeline avance normalement ;
 - un evenement `ended` exploitable pour l'auto-next.
+- des commandes de reprise et de saut d'introduction envoyees au media actif.
 
 Vidzy utilise actuellement une page d'enveloppe sur `vidzy.org`, puis charge le
 lecteur HTML5 reel depuis `vidzy.cc`. Les deux domaines sont autorises afin que

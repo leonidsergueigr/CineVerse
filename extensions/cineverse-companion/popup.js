@@ -58,6 +58,21 @@ function render(status) {
   text("rate", `${finite(payload.playbackRate) || 1}x`);
   text("signal-age", relativeAge(status.receivedAt));
   text("event-name", String(payload.eventName || "-").slice(0, 32));
+  text(
+    "buffering",
+    `${Math.floor(finite(payload.bufferingCount))} · ${formatTime(finite(payload.bufferingSeconds))}`,
+  );
+  text("seeks", String(Math.floor(finite(payload.seekCount))));
+  text(
+    "startup",
+    finite(payload.startupMilliseconds) > 0
+      ? `${(finite(payload.startupMilliseconds) / 1000).toFixed(1)} s`
+      : "-",
+  );
+  text(
+    "quality",
+    finite(payload.videoHeight) > 0 ? `${Math.round(finite(payload.videoHeight))}p` : "-",
+  );
   document.querySelector("#progress-fill").style.width = `${percent}%`;
 }
 

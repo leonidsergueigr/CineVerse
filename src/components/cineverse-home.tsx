@@ -1200,6 +1200,7 @@ function MediaCard({
 
 function resumeLabel(item: CatalogItem) {
   if (!item.resume) return "";
+  if (item.resume.label) return item.resume.label;
   const position =
     item.mediaType === "tv" &&
     item.resume.seasonNumber !== null &&

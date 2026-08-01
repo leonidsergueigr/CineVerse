@@ -24,12 +24,15 @@ import {
   parseCineVerseCompanionMessage,
 } from "@/lib/provider-tracking";
 import { useWatchSessionTracker } from "@/hooks/use-watch-session-tracker";
+import { rewindResumePosition } from "@/lib/playback-intelligence-core";
 import { TRACKING_CONFIG } from "@/lib/watch-tracking";
 import { SiteHeader } from "@/components/site-header";
 import type {
   EmbedProvider,
   EpisodeInfo,
   MediaDetails,
+  LearnedPlaybackSegment,
+  PlaybackPreferences,
   SeasonEpisode,
   SeriesProgressSummary,
   WatchProgress,
@@ -47,6 +50,8 @@ type Props = {
   initialEpisodeInfo: EpisodeInfo | null;
   initialSeasonEpisodes: SeasonEpisode[];
   initialSeriesProgress: SeriesProgressSummary | null;
+  initialPlaybackPreferences: PlaybackPreferences;
+  initialLearnedPlaybackSegments: LearnedPlaybackSegment[];
 };
 
 export function WatchExperience({
@@ -61,6 +66,8 @@ export function WatchExperience({
   initialEpisodeInfo,
   initialSeasonEpisodes,
   initialSeriesProgress,
+  initialPlaybackPreferences,
+  initialLearnedPlaybackSegments,
 }: Props) {
   const availableSeasons = useMemo(
     () =>
@@ -86,12 +93,26 @@ export function WatchExperience({
   const [liked, setLiked] = useState(initialLiked);
   const [disliked, setDisliked] = useState(initialDisliked);
   const [watchlisted, setWatchlisted] = useState(initialWatchlisted);
-  const [autoNext, setAutoNext] = useState(true);
+  const [playbackPreferences, setPlaybackPreferences] = useState(
+    initialPlaybackPreferences,
+  );
+  const autoNext = playbackPreferences.autoNextEnabled;
   const [autoNextCountdown, setAutoNextCountdown] = useState<number | null>(
     null,
   );
   const [overviewExpanded, setOverviewExpanded] = useState(false);
   const [posterExpanded, setPosterExpanded] = useState(false);
+  const [learnedPlaybackSegments, setLearnedPlaybackSegments] = useState(
+    initialLearnedPlaybackSegments,
+  );
+  const [stillWatchingPrompt, setStillWatchingPrompt] = useState(false);
+  const [sessionSummary, setSessionSummary] = useState<{
+    watchedSeconds: number;
+    bufferingSeconds: number;
+    completedEpisodes: number;
+  } | null>(null);
+  const [providerSuggestionDismissed, setProviderSuggestionDismissed] =
+    useState(false);
   const [trackingAvailable, setTrackingAvailable] = useState(false);
   const [companionAvailable, setCompanionAvailable] = useState(false);
   const [companionTrackingActive, setCompanionTrackingActive] = useState(false);
@@ -100,13 +121,22 @@ export function WatchExperience({
     duration: initialProgress?.durationSeconds ?? 0,
   });
   const [resumeStartSeconds, setResumeStartSeconds] = useState(
-    initialProgress?.completed ? 0 : initialProgress?.progressSeconds ?? 0,
+    initialProgress?.completed
+      ? 0
+      : rewindResumePosition(initialProgress?.progressSeconds ?? 0),
   );
   const [episodeInfo, setEpisodeInfo] = useState(initialEpisodeInfo);
   const [seasonEpisodes, setSeasonEpisodes] = useState(initialSeasonEpisodes);
   const [seriesProgress, setSeriesProgress] = useState(initialSeriesProgress);
   const [, startTransition] = useTransition();
   const autoAdvancedRef = useRef("");
+  const consecutiveAutoAdvancesRef = useRef(0);
+  const stillWatchingKeyRef = useRef("");
+  const lastSummaryKeyRef = useRef("");
+  const scheduledAutoNextKeyRef = useRef("");
+  const playbackSelectionRef = useRef("");
+  const activeObserverSessionRef = useRef("");
+  const playbackSelectionChangedAtRef = useRef(Date.now());
   const playerFrameRef = useRef<HTMLIFrameElement>(null);
   const fallbackProgressRef = useRef(initialProgress?.progressSeconds ?? 0);
   const latestDurationRef = useRef(initialProgress?.durationSeconds ?? 0);
@@ -115,7 +145,9 @@ export function WatchExperience({
   const lastProgressPaintAtRef = useRef(0);
   const autoNextTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const resumeTargetRef = useRef(
-    initialProgress?.completed ? 0 : initialProgress?.progressSeconds ?? 0,
+    initialProgress?.completed
+      ? 0
+      : rewindResumePosition(initialProgress?.progressSeconds ?? 0),
   );
   const resumeAttemptsRef = useRef(0);
   const resumeAppliedRef = useRef(false);
@@ -139,6 +171,14 @@ export function WatchExperience({
   const officialDurationSeconds = activeRuntime
     ? Math.max(60, activeRuntime * 60)
     : null;
+  const introSegment = learnedPlaybackSegments.find(
+    (segment) => segment.segmentType === "intro",
+  );
+  const creditsSegment = learnedPlaybackSegments.find(
+    (segment) => segment.segmentType === "credits",
+  );
+  const learnedIntro = introSegment?.disabled ? undefined : introSegment;
+  const learnedCredits = creditsSegment?.disabled ? undefined : creditsSegment;
   const seriesEpisodeCounts = useMemo(
     () =>
       availableSeasons.map((item) => ({
@@ -154,9 +194,17 @@ export function WatchExperience({
       seasonNumber: season,
       episodeNumber: episode,
       autoplay: started,
-      autoNext,
+      // CineVerse owns episode transitions. Enabling the provider option as well
+      // can make both players advance and skip an episode.
+      autoNext: false,
     });
-  }, [activeLanguage, autoNext, detail, episode, provider, season, started]);
+  }, [activeLanguage, detail, episode, provider, season, started]);
+  const playbackSelectionKey = `${provider?.id ?? "none"}:${activeLanguage}:${season}:${episode}:${started ? "playing" : "preview"}`;
+  if (playbackSelectionRef.current !== playbackSelectionKey) {
+    playbackSelectionRef.current = playbackSelectionKey;
+    activeObserverSessionRef.current = "";
+    playbackSelectionChangedAtRef.current = Date.now();
+  }
   const playerSrc = useMemo(
     () =>
       started
@@ -264,6 +312,93 @@ export function WatchExperience({
     },
   });
 
+  const recordPlaybackObservation = useCallback(
+    async (
+      observationType: "intro" | "credits",
+      fromSeconds: number,
+      toSeconds: number,
+      durationSeconds: number,
+    ) => {
+      if (
+        detail.mediaType !== "tv" ||
+        !trackingSnapshot?.sessionId ||
+        durationSeconds <= 0
+      ) {
+        return;
+      }
+      const response = await fetch("/api/playback-intelligence", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionId: trackingSnapshot.sessionId,
+          tmdbId: detail.id,
+          seasonNumber: season,
+          episodeNumber: episode,
+          observationType,
+          fromSeconds,
+          toSeconds,
+          durationSeconds,
+          observedAt: Date.now(),
+        }),
+      });
+      if (!response.ok) return;
+      const payload = (await response.json()) as {
+        segments?: LearnedPlaybackSegment[];
+      };
+      if (payload.segments) setLearnedPlaybackSegments(payload.segments);
+    },
+    [detail.id, detail.mediaType, episode, season, trackingSnapshot?.sessionId],
+  );
+
+  const updatePlaybackPreference = useCallback(
+    (patch: Partial<PlaybackPreferences>) => {
+      setPlaybackPreferences((current) => ({ ...current, ...patch }));
+      void fetch("/api/playback-preferences", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(patch),
+      })
+        .then(async (response) => {
+          if (!response.ok) throw new Error("Preferences non enregistrees.");
+          const payload = (await response.json()) as {
+            preferences?: PlaybackPreferences;
+          };
+          if (payload.preferences) setPlaybackPreferences(payload.preferences);
+        })
+        .catch(() => setPlaybackPreferences(initialPlaybackPreferences));
+    },
+    [initialPlaybackPreferences],
+  );
+
+  const updateLearnedSegment = useCallback(
+    async (
+      segmentType: "intro" | "credits",
+      patch: {
+        disabled?: boolean;
+        startSeconds?: number;
+        endSeconds?: number;
+        remainingSeconds?: number;
+      },
+    ) => {
+      const response = await fetch("/api/playback-intelligence", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          tmdbId: detail.id,
+          seasonNumber: season,
+          segmentType,
+          ...patch,
+        }),
+      });
+      if (!response.ok) return;
+      const payload = (await response.json()) as {
+        segments?: LearnedPlaybackSegment[];
+      };
+      if (payload.segments) setLearnedPlaybackSegments(payload.segments);
+    },
+    [detail.id, season],
+  );
+
   useEffect(() => {
     document.title =
       detail.mediaType === "tv"
@@ -297,14 +432,17 @@ export function WatchExperience({
     season,
   ]);
 
-  const advanceEpisode = useCallback((force = false) => {
+  const advanceEpisode = useCallback((force = false, expectedKey?: string) => {
     if ((!force && !autoNext) || detail.mediaType !== "tv") return false;
-    const key = `${season}-${episode}`;
+    const key = playbackSelectionRef.current;
+    if (expectedKey && playbackSelectionRef.current !== expectedKey) return false;
     if (autoAdvancedRef.current === key) return false;
+    if (force) consecutiveAutoAdvancesRef.current = 0;
     if (autoNextTimerRef.current) {
       clearInterval(autoNextTimerRef.current);
       autoNextTimerRef.current = null;
     }
+    scheduledAutoNextKeyRef.current = "";
     setAutoNextCountdown(null);
 
     const currentSeason = availableSeasons.find(
@@ -327,6 +465,8 @@ export function WatchExperience({
       lastProgressPaintAtRef.current = 0;
       setTrackingAvailable(false);
       setCompanionTrackingActive(false);
+      setStillWatchingPrompt(false);
+      stillWatchingKeyRef.current = "";
       replaceEpisodeUrl(season, nextEpisode);
       return true;
     }
@@ -351,6 +491,8 @@ export function WatchExperience({
       lastProgressPaintAtRef.current = 0;
       setTrackingAvailable(false);
       setCompanionTrackingActive(false);
+      setStillWatchingPrompt(false);
+      stillWatchingKeyRef.current = "";
       replaceEpisodeUrl(nextSeason.seasonNumber, 1);
       return true;
     }
@@ -362,7 +504,10 @@ export function WatchExperience({
       clearInterval(autoNextTimerRef.current);
       autoNextTimerRef.current = null;
     }
+    scheduledAutoNextKeyRef.current = "";
     setAutoNextCountdown(null);
+    setStillWatchingPrompt(false);
+    stillWatchingKeyRef.current = "";
   }, []);
 
   const scheduleAutoAdvance = useCallback(() => {
@@ -374,7 +519,19 @@ export function WatchExperience({
       return;
     }
 
-    let remaining = 5;
+    const sourceKey = playbackSelectionRef.current;
+    if (!sourceKey || autoAdvancedRef.current === sourceKey) return;
+    if (
+      playbackPreferences.bingeLimitEpisodes > 0 &&
+      consecutiveAutoAdvancesRef.current >=
+        playbackPreferences.bingeLimitEpisodes - 1
+    ) {
+      stillWatchingKeyRef.current = sourceKey;
+      setStillWatchingPrompt(true);
+      return;
+    }
+    scheduledAutoNextKeyRef.current = sourceKey;
+    let remaining = TRACKING_CONFIG.autoNextCountdownSeconds;
     setAutoNextCountdown(remaining);
     autoNextTimerRef.current = setInterval(() => {
       remaining -= 1;
@@ -383,13 +540,16 @@ export function WatchExperience({
           clearInterval(autoNextTimerRef.current);
           autoNextTimerRef.current = null;
         }
+        scheduledAutoNextKeyRef.current = "";
         setAutoNextCountdown(null);
-        advanceEpisode();
+        if (advanceEpisode(false, sourceKey)) {
+          consecutiveAutoAdvancesRef.current += 1;
+        }
         return;
       }
       setAutoNextCountdown(remaining);
     }, 1000);
-  }, [advanceEpisode, autoNext, detail.mediaType]);
+  }, [advanceEpisode, autoNext, detail.mediaType, playbackPreferences.bingeLimitEpisodes]);
 
   const requestPlayerState = useCallback(() => {
     if (companionTrackingRef.current) return;
@@ -397,6 +557,20 @@ export function WatchExperience({
     if (!playerWindow) return;
     playerWindow.postMessage({ action: "getCurrentTime" }, "*");
   }, []);
+
+  const sendCompanionCommand = useCallback(
+    (action: "seek" | "play", time?: number) => {
+      window.postMessage(
+        {
+          source: "cineverse-app",
+          type: "companion-command",
+          payload: { action, time },
+        },
+        window.location.origin,
+      );
+    },
+    [],
+  );
 
   const seekPlayerToResume = useCallback(() => {
     const target = resumeTargetRef.current;
@@ -411,13 +585,14 @@ export function WatchExperience({
     }
 
     resumeAttemptsRef.current += 1;
+    sendCompanionCommand("seek", target);
     playerWindow.postMessage({ action: "seek", value: target }, "*");
     playerWindow.postMessage({ action: "seek", time: target }, "*");
     playerWindow.postMessage(
       { action: "setCurrentTime", value: target },
       "*",
     );
-  }, []);
+  }, [sendCompanionCommand]);
 
   useEffect(() => {
     if (!started) return;
@@ -469,6 +644,23 @@ export function WatchExperience({
         ? parseCineVerseCompanionMessage(data, officialDurationSeconds)
         : providerTrackingAdapter.parseMessage(data);
       if (!playbackEvent) return;
+      if (
+        playbackEvent.trackingMethod === "browser-extension" &&
+        playbackEvent.observerSessionId
+      ) {
+        const activeObserverSession = activeObserverSessionRef.current;
+        if (!activeObserverSession) {
+          // A delayed ended event from the iframe being replaced must not own
+          // the freshly selected episode.
+          if (playbackEvent.ended) return;
+          activeObserverSessionRef.current = playbackEvent.observerSessionId;
+        } else if (
+          playbackEvent.observerSessionId !== activeObserverSession
+        ) {
+          if (playbackEvent.ended) return;
+          activeObserverSessionRef.current = playbackEvent.observerSessionId;
+        }
+      }
       if (playbackEvent.trackingMethod === "browser-extension") {
         companionTrackingRef.current = true;
         setCompanionAvailable(true);
@@ -481,19 +673,48 @@ export function WatchExperience({
         0,
         playbackEvent.duration - playbackEvent.currentTime,
       );
+      const hasPreciseProviderSignal =
+        playbackEvent.trackingMethod === "browser-extension" ||
+        playbackEvent.trackingMethod === "provider-message";
       const reachedCredits =
-        playbackEvent.trackingMethod === "browser-extension" &&
+        hasPreciseProviderSignal &&
+        Boolean(learnedCredits) &&
         playbackEvent.playbackState === "playing" &&
         !playbackEvent.seeking &&
         playbackEvent.duration > 0 &&
-        playbackEvent.progressPercent !== null &&
-        playbackEvent.progressPercent >=
-          TRACKING_CONFIG.automaticCompletionThreshold &&
-        remainingSeconds <= TRACKING_CONFIG.autoNextMaximumRemainingSeconds;
+        playbackEvent.currentTime >= (learnedCredits?.startSeconds ?? Infinity) &&
+        remainingSeconds <=
+          (learnedCredits?.remainingSeconds ?? 0) +
+            TRACKING_CONFIG.segmentLearningToleranceSeconds;
+      if (
+        (playbackEvent.ended || reachedCredits) &&
+        Date.now() - playbackSelectionChangedAtRef.current < 3_000
+      ) {
+        return;
+      }
       const trackingSignal = reachedCredits
         ? { ...playbackEvent, creditsReached: true }
         : playbackEvent;
       void reportProviderSignal(trackingSignal).catch(() => undefined);
+
+      if (
+        detail.mediaType === "tv" &&
+        playbackEvent.trackingMethod === "browser-extension" &&
+        playbackEvent.eventName === "seeked" &&
+        playbackEvent.seekFromSeconds !== null &&
+        playbackEvent.seekFromSeconds !== undefined &&
+        playbackEvent.seekToSeconds !== null &&
+        playbackEvent.seekToSeconds !== undefined &&
+        playbackEvent.seekFromSeconds <= 20 &&
+        playbackEvent.seekToSeconds >= 30
+      ) {
+        void recordPlaybackObservation(
+          "intro",
+          playbackEvent.seekFromSeconds,
+          playbackEvent.seekToSeconds,
+          playbackEvent.duration,
+        ).catch(() => undefined);
+      }
 
       const currentTime = playbackEvent.currentTime;
       const duration = playbackEvent.duration;
@@ -511,7 +732,14 @@ export function WatchExperience({
         setProgress({ currentTime, duration });
       }
 
-      if (playbackEvent.playbackState === "paused" && !playbackEvent.ended) return;
+      if (
+        !playbackEvent.ended &&
+        (playbackEvent.playbackState === "paused" ||
+          playbackEvent.playbackState === "buffering")
+      ) {
+        cancelScheduledAutoNext();
+        return;
+      }
 
       if (playbackEvent.ended || reachedCredits) {
         const duration = firstPositiveNumber(
@@ -531,6 +759,24 @@ export function WatchExperience({
         fallbackProgressRef.current = finalPosition;
         latestDurationRef.current = duration;
         completeCurrentEpisode();
+        const summaryKey = playbackSelectionRef.current;
+        if (
+          playbackPreferences.sessionSummaryEnabled &&
+          lastSummaryKeyRef.current !== summaryKey
+        ) {
+          lastSummaryKeyRef.current = summaryKey;
+          setSessionSummary({
+            watchedSeconds:
+              playbackEvent.watchedSeconds ??
+              trackingSnapshot?.providerWatchedSeconds ??
+              0,
+            bufferingSeconds:
+              playbackEvent.bufferingSeconds ??
+              trackingSnapshot?.bufferingSeconds ??
+              0,
+            completedEpisodes: detail.mediaType === "tv" ? 1 : 0,
+          });
+        }
         scheduleAutoAdvance();
         return;
       }
@@ -559,13 +805,20 @@ export function WatchExperience({
     return () => window.removeEventListener("message", onMessage);
   }, [
     completeCurrentEpisode,
+    cancelScheduledAutoNext,
     officialDurationSeconds,
+    detail.mediaType,
+    learnedCredits,
+    playbackPreferences.sessionSummaryEnabled,
     providerTrackingAdapter,
+    recordPlaybackObservation,
     reportProviderSignal,
     requestPlayerState,
     scheduleAutoAdvance,
     seekPlayerToResume,
     trustedMessageOrigins,
+    trackingSnapshot?.bufferingSeconds,
+    trackingSnapshot?.providerWatchedSeconds,
   ]);
 
   useEffect(() => {
@@ -670,7 +923,9 @@ export function WatchExperience({
   }
 
   function changeSeason(nextSeason: number) {
+    if (nextSeason > season) recordCreditsAtCurrentPosition();
     cancelScheduledAutoNext();
+    consecutiveAutoAdvancesRef.current = 0;
     setSeason(nextSeason);
     setEpisode(1);
     setProgress({ currentTime: 0, duration: 0 });
@@ -686,12 +941,16 @@ export function WatchExperience({
     resumeAppliedRef.current = false;
     setTrackingAvailable(false);
     setCompanionTrackingActive(false);
+    setProviderSuggestionDismissed(false);
+    setSessionSummary(null);
     autoAdvancedRef.current = "";
     replaceEpisodeUrl(nextSeason, 1);
   }
 
   function changeEpisode(nextEpisode: number) {
+    if (nextEpisode === episode + 1) recordCreditsAtCurrentPosition();
     cancelScheduledAutoNext();
+    consecutiveAutoAdvancesRef.current = 0;
     setEpisode(nextEpisode);
     setProgress({ currentTime: 0, duration: 0 });
     setResumeStartSeconds(0);
@@ -706,12 +965,44 @@ export function WatchExperience({
     resumeAppliedRef.current = false;
     setTrackingAvailable(false);
     setCompanionTrackingActive(false);
+    setProviderSuggestionDismissed(false);
+    setSessionSummary(null);
     autoAdvancedRef.current = "";
     replaceEpisodeUrl(season, nextEpisode);
   }
 
+  function recordCreditsAtCurrentPosition() {
+    const duration = firstPositiveNumber(
+      progress.duration,
+      latestDurationRef.current,
+      officialDurationSeconds ?? 0,
+    );
+    const fromSeconds = firstPositiveNumber(
+      progress.currentTime,
+      fallbackProgressRef.current,
+    );
+    const remainingSeconds = Math.max(0, duration - fromSeconds);
+    if (
+      detail.mediaType !== "tv" ||
+      !companionTrackingRef.current ||
+      duration <= 0 ||
+      remainingSeconds < 10 ||
+      remainingSeconds > 5 * 60
+    ) {
+      return;
+    }
+    void recordPlaybackObservation(
+      "credits",
+      fromSeconds,
+      duration,
+      duration,
+    ).catch(() => undefined);
+  }
+
   function startPlayback() {
-    resumeTargetRef.current = completed ? 0 : fallbackProgressRef.current;
+    resumeTargetRef.current = completed
+      ? 0
+      : rewindResumePosition(fallbackProgressRef.current);
     setResumeStartSeconds(resumeTargetRef.current);
     resumeAttemptsRef.current = 0;
     resumeAppliedRef.current = false;
@@ -785,7 +1076,7 @@ export function WatchExperience({
       latestDurationRef.current = storedProgress?.durationSeconds ?? 0;
       resumeTargetRef.current = storedProgress?.completed
         ? 0
-        : storedProgress?.progressSeconds ?? 0;
+        : rewindResumePosition(storedProgress?.progressSeconds ?? 0);
       resumeAttemptsRef.current = 0;
       resumeAppliedRef.current = false;
       setProgress({
@@ -793,7 +1084,9 @@ export function WatchExperience({
         duration: storedProgress?.durationSeconds ?? 0,
       });
       setResumeStartSeconds(
-        storedProgress?.completed ? 0 : storedProgress?.progressSeconds ?? 0,
+        storedProgress?.completed
+          ? 0
+          : rewindResumePosition(storedProgress?.progressSeconds ?? 0),
       );
       setCompleted(storedProgress?.completed ?? false);
       setEpisodeInfo(episodePayload.episodeInfo ?? null);
@@ -831,6 +1124,46 @@ export function WatchExperience({
     started,
   ]);
 
+  useEffect(() => {
+    if (detail.mediaType !== "tv") return;
+    const controller = new AbortController();
+    const params = new URLSearchParams({
+      tmdbId: String(detail.id),
+      season: String(season),
+    });
+    void fetch(`/api/playback-intelligence?${params.toString()}`, {
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) return;
+        const payload = (await response.json()) as {
+          segments?: LearnedPlaybackSegment[];
+        };
+        if (payload.segments) setLearnedPlaybackSegments(payload.segments);
+      })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [detail.id, detail.mediaType, season]);
+
+  function skipIntroduction() {
+    if (!learnedIntro) return;
+    const target = Math.max(0, learnedIntro.endSeconds);
+    sendCompanionCommand("seek", target);
+    const playerWindow = playerFrameRef.current?.contentWindow;
+    playerWindow?.postMessage({ action: "seek", value: target }, "*");
+    playerWindow?.postMessage({ action: "seek", time: target }, "*");
+    setProgress((current) => ({ ...current, currentTime: target }));
+    fallbackProgressRef.current = target;
+  }
+
+  function confirmStillWatching() {
+    const sourceKey = stillWatchingKeyRef.current;
+    consecutiveAutoAdvancesRef.current = 0;
+    setStillWatchingPrompt(false);
+    stillWatchingKeyRef.current = "";
+    if (sourceKey) advanceEpisode(true, sourceKey);
+  }
+
   const seriesPercent =
     seriesProgress?.totalEpisodes
       ? Math.min(
@@ -839,6 +1172,24 @@ export function WatchExperience({
             100,
         )
       : 0;
+  const preciseTrackingActive =
+    companionTrackingActive ||
+    trackingSnapshot?.trackingMethod === "browser-extension" ||
+    trackingSnapshot?.trackingMethod === "provider-message";
+  const showSkipIntro = Boolean(
+    started &&
+      preciseTrackingActive &&
+      playbackPreferences.introSkipEnabled &&
+      learnedIntro &&
+      progress.currentTime >= Math.max(0, learnedIntro.startSeconds - 5) &&
+      progress.currentTime < learnedIntro.endSeconds - 2,
+  );
+  const suggestedProvider =
+    !providerSuggestionDismissed &&
+    (trackingSnapshot?.bufferingCount ?? 0) >=
+      TRACKING_CONFIG.providerSwitchBufferingThreshold
+      ? providers.find((item) => item.id !== providerId)
+      : undefined;
   const isAnime =
     detail.mediaType === "tv" &&
     detail.originalLanguage === "ja" &&
@@ -1022,6 +1373,43 @@ export function WatchExperience({
               </button>
             </div>
           ) : null}
+          {showSkipIntro ? (
+            <button
+              type="button"
+              onClick={skipIntroduction}
+              className="absolute bottom-20 right-4 z-30 inline-flex h-10 items-center gap-2 rounded bg-black/85 px-4 text-sm font-bold text-white shadow-2xl ring-1 ring-white/20 transition hover:bg-white hover:text-black"
+            >
+              Passer l&apos;introduction
+              <SkipForward className="h-4 w-4" />
+            </button>
+          ) : null}
+          {stillWatchingPrompt ? (
+            <div className="absolute inset-0 z-40 grid place-items-center bg-black/70 p-4 backdrop-blur-sm">
+              <div className="w-full max-w-sm rounded-md bg-[#171717] p-6 text-center shadow-2xl ring-1 ring-white/15">
+                <h2 className="text-xl font-black">Toujours en train de regarder ?</h2>
+                <p className="mt-2 text-sm text-zinc-400">
+                  La lecture automatique est en pause.
+                </p>
+                <div className="mt-5 flex justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={confirmStillWatching}
+                    className="inline-flex h-10 items-center gap-2 rounded bg-white px-4 text-sm font-black text-black"
+                  >
+                    <Play className="h-4 w-4 fill-current" />
+                    Continuer
+                  </button>
+                  <button
+                    type="button"
+                    onClick={cancelScheduledAutoNext}
+                    className="h-10 rounded bg-white/10 px-4 text-sm font-bold text-white"
+                  >
+                    Arreter
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </section>
       </div>
 
@@ -1072,10 +1460,12 @@ export function WatchExperience({
                   lastProgressPaintAtRef.current = 0;
                   setTrackingAvailable(false);
                   setCompanionTrackingActive(false);
-                  resumeTargetRef.current = fallbackProgressRef.current;
+                  resumeTargetRef.current = rewindResumePosition(
+                    fallbackProgressRef.current,
+                  );
                   resumeAttemptsRef.current = 0;
                   resumeAppliedRef.current = false;
-                  setResumeStartSeconds(fallbackProgressRef.current);
+                  setResumeStartSeconds(resumeTargetRef.current);
                   setProviderId(event.target.value);
                 }}
                 className="control-field h-10 w-full"
@@ -1108,10 +1498,12 @@ export function WatchExperience({
                   lastProgressPaintAtRef.current = 0;
                   setTrackingAvailable(false);
                   setCompanionTrackingActive(false);
-                  resumeTargetRef.current = fallbackProgressRef.current;
+                  resumeTargetRef.current = rewindResumePosition(
+                    fallbackProgressRef.current,
+                  );
                   resumeAttemptsRef.current = 0;
                   resumeAppliedRef.current = false;
-                  setResumeStartSeconds(fallbackProgressRef.current);
+                  setResumeStartSeconds(resumeTargetRef.current);
                   setLanguage(event.target.value);
                 }}
                 className="control-field h-10 w-full"
@@ -1169,7 +1561,7 @@ export function WatchExperience({
                   type="button"
                   onClick={() => {
                     if (autoNext) cancelScheduledAutoNext();
-                    setAutoNext((current) => !current);
+                    updatePlaybackPreference({ autoNextEnabled: !autoNext });
                   }}
                   aria-pressed={autoNext}
                   className={`mt-4 inline-flex h-10 items-center justify-center gap-2 rounded px-3 text-xs font-bold ring-1 transition ${
@@ -1184,8 +1576,156 @@ export function WatchExperience({
               </>
             ) : null}
           </div>
+          {detail.mediaType === "tv" ? (
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-white/10 pt-3 text-xs text-zinc-400 lg:col-span-2">
+              <label className="inline-flex items-center gap-2">
+                <span>Pause auto apres</span>
+                <select
+                  value={playbackPreferences.bingeLimitEpisodes}
+                  onChange={(event) =>
+                    updatePlaybackPreference({
+                      bingeLimitEpisodes: Number(event.target.value),
+                    })
+                  }
+                  className="control-field h-8 min-w-24"
+                  aria-label="Limite d'episodes consecutifs"
+                >
+                  <option value={0}>Jamais</option>
+                  <option value={3}>3 episodes</option>
+                  <option value={4}>4 episodes</option>
+                  <option value={5}>5 episodes</option>
+                  <option value={6}>6 episodes</option>
+                </select>
+              </label>
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={playbackPreferences.introSkipEnabled}
+                  onChange={(event) =>
+                    updatePlaybackPreference({
+                      introSkipEnabled: event.target.checked,
+                    })
+                  }
+                  className="h-4 w-4 accent-[#e50914]"
+                />
+                Intro intelligente
+              </label>
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={playbackPreferences.sessionSummaryEnabled}
+                  onChange={(event) =>
+                    updatePlaybackPreference({
+                      sessionSummaryEnabled: event.target.checked,
+                    })
+                  }
+                  className="h-4 w-4 accent-[#e50914]"
+                />
+                Resume de session
+              </label>
+              {introSegment ? (
+                <div className="inline-flex items-center gap-2 rounded bg-white/5 px-2 py-1">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void updateLearnedSegment("intro", {
+                        disabled: !introSegment.disabled,
+                      })
+                    }
+                    className={introSegment.disabled ? "text-zinc-500" : "text-white"}
+                    aria-pressed={!introSegment.disabled}
+                  >
+                    Intro {introSegment.disabled ? "desactivee" : "active"}
+                  </button>
+                  <label className="inline-flex items-center gap-1 text-zinc-500">
+                    fin
+                    <input
+                      type="number"
+                      min={30}
+                      max={300}
+                      defaultValue={Math.round(introSegment.endSeconds)}
+                      onBlur={(event) =>
+                        void updateLearnedSegment("intro", {
+                          endSeconds: Number(event.target.value),
+                        })
+                      }
+                      className="h-7 w-16 rounded bg-black/30 px-2 text-white ring-1 ring-white/10"
+                      aria-label="Fin de l'introduction en secondes"
+                    />
+                    s
+                  </label>
+                </div>
+              ) : null}
+              {creditsSegment ? (
+                <div className="inline-flex items-center gap-2 rounded bg-white/5 px-2 py-1">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void updateLearnedSegment("credits", {
+                        disabled: !creditsSegment.disabled,
+                      })
+                    }
+                    className={creditsSegment.disabled ? "text-zinc-500" : "text-white"}
+                    aria-pressed={!creditsSegment.disabled}
+                  >
+                    Generique {creditsSegment.disabled ? "desactive" : "actif"}
+                  </button>
+                  <label className="inline-flex items-center gap-1 text-zinc-500">
+                    debut
+                    <input
+                      type="number"
+                      min={60}
+                      max={Math.max(60, Math.round(creditsSegment.endSeconds))}
+                      defaultValue={Math.round(creditsSegment.startSeconds)}
+                      onBlur={(event) =>
+                        void updateLearnedSegment("credits", {
+                          startSeconds: Number(event.target.value),
+                          remainingSeconds: Math.max(
+                            0,
+                            creditsSegment.endSeconds - Number(event.target.value),
+                          ),
+                        })
+                      }
+                      className="h-7 w-16 rounded bg-black/30 px-2 text-white ring-1 ring-white/10"
+                      aria-label="Debut du generique en secondes"
+                    />
+                    s
+                  </label>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </section>
+
+      {sessionSummary ? (
+        <aside className="fixed bottom-4 right-4 z-50 w-[min(360px,calc(100vw-2rem))] rounded-md bg-[#171717] p-4 shadow-2xl ring-1 ring-white/15">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="font-black text-white">Session terminee</p>
+              <p className="mt-1 text-sm text-zinc-400">
+                {formatCompactDuration(sessionSummary.watchedSeconds)} regardees
+                {sessionSummary.completedEpisodes
+                  ? ` · ${sessionSummary.completedEpisodes} episode termine`
+                  : ""}
+              </p>
+              {sessionSummary.bufferingSeconds > 0 ? (
+                <p className="mt-1 text-xs text-zinc-500">
+                  {formatCompactDuration(sessionSummary.bufferingSeconds)} de chargement
+                </p>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              onClick={() => setSessionSummary(null)}
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded text-zinc-400 ring-1 ring-white/10 hover:text-white"
+              aria-label="Fermer le resume"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </aside>
+      ) : null}
 
       <section className="mx-auto max-w-7xl px-4 pb-12 pt-8 sm:px-6 lg:px-8">
         <div className="grid min-w-0 gap-8 xl:grid-cols-[minmax(0,1fr)_300px]">
@@ -1360,11 +1900,42 @@ export function WatchExperience({
               {trackingLabel ? (
                 <p className="mt-2 text-xs text-zinc-500">{trackingLabel}</p>
               ) : null}
+              {suggestedProvider ? (
+                <div className="mt-4 rounded bg-amber-400/10 p-3 text-xs text-amber-100 ring-1 ring-amber-300/20">
+                  <p>
+                    Lecture instable. {suggestedProvider.name} est disponible.
+                  </p>
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setProviderSuggestionDismissed(true);
+                        resumeTargetRef.current = rewindResumePosition(
+                          fallbackProgressRef.current,
+                        );
+                        setResumeStartSeconds(resumeTargetRef.current);
+                        setProviderId(suggestedProvider.id);
+                      }}
+                      className="font-bold text-white underline underline-offset-4"
+                    >
+                      Essayer cette source
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setProviderSuggestionDismissed(true)}
+                      className="text-zinc-400"
+                    >
+                      Ignorer
+                    </button>
+                  </div>
+                </div>
+              ) : null}
 
               {detail.mediaType === "tv" && nextEpisodeSelection ? (
                 <button
                   type="button"
                   onClick={() => {
+                    recordCreditsAtCurrentPosition();
                     advanceEpisode(true);
                     document
                       .getElementById("watch-player")
@@ -1658,6 +2229,9 @@ function isRecentlyChecked(provider: EmbedProvider) {
 
 function providerStatusLabel(provider: EmbedProvider) {
   const details: string[] = [];
+  if (provider.performance && provider.performance.sampleCount >= 2) {
+    details.push(`${provider.performance.score}/100`);
+  }
   if (provider.quality) details.push(`${provider.quality}p`);
   const languages = provider.languages
     ?.slice(0, 2)
@@ -1673,7 +2247,10 @@ function providerStatusTitle(provider: EmbedProvider) {
   const status = checkedAt
     ? `Dernier controle : ${checkedAt.slice(0, 10)}`
     : "Aucun controle recent enregistre";
-  return `${provider.name} · ${providerStatusLabel(provider)} · ${status}`;
+  const measured = provider.performance
+    ? ` · ${provider.performance.bufferingCount} chargements · ${provider.performance.errorCount} erreurs`
+    : "";
+  return `${provider.name} · ${providerStatusLabel(provider)} · ${status}${measured}`;
 }
 
 function appendResumeFragment(url: string, seconds: number) {

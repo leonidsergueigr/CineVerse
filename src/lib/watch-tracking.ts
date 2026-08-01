@@ -6,6 +6,13 @@ export const TRACKING_CONFIG = {
   maximumEstimatedRuntimeMultiplier: 1.5,
   autoNextMaximumRemainingSeconds: 45,
   maximumExtensionObservationGapSeconds: 300,
+  resumeRewindSeconds: 8,
+  autoNextCountdownSeconds: 5,
+  defaultBingeLimitEpisodes: 4,
+  providerSwitchBufferingThreshold: 3,
+  introLearningMinimumEpisodes: 3,
+  segmentLearningToleranceSeconds: 18,
+  maximumActiveDecisionSeconds: 30 * 60,
 } as const;
 
 export type CompletionSource =
