@@ -98,7 +98,7 @@ export function CineVerseSplash() {
           <path
             className="cineverse-splash__ribbon"
             pathLength="1"
-            d="M-32-18C9 1 20 31 39 50 51 63 63 67 82 71"
+            d="M332-18C291 1 280 31 261 50 249 63 237 67 218 71"
           />
           <path
             className="cineverse-splash__c"

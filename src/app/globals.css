@@ -356,7 +356,7 @@ html[data-cineverse-splash="seen"] .cineverse-splash {
 @keyframes splash-ribbon-enter {
   0% {
     stroke-dashoffset: 1;
-    transform: translate(-24px, -18px);
+    transform: translate(24px, -18px);
   }
   100% {
     stroke-dashoffset: 0;
@@ -367,7 +367,7 @@ html[data-cineverse-splash="seen"] .cineverse-splash {
 @keyframes splash-ribbon-release {
   to {
     opacity: 0;
-    transform: translate(18px, 14px);
+    transform: translate(-18px, 14px);
   }
 }
 

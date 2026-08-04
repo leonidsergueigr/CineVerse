@@ -37,11 +37,12 @@ lockup complet reste la signature principale sur fond sombre.
 
 ## Signature animee
 
-Au premier chargement d'une session, une bande rouge rejoint le centre de
-l'ecran et dessine le `C`. Le symbole Play apparait ensuite avec une impulsion,
-puis le mot-symbole et la promesse de marque terminent la sequence. Cette
-signature dure moins de trois secondes, peut etre passee avec `Echap` et ne se
-rejoue pas pendant les navigations de la meme session.
+Au premier chargement d'une session, une bande rouge arrive depuis le coin
+superieur droit, rejoint l'ouverture du symbole et dessine le `C`. Le symbole
+Play apparait ensuite avec une impulsion, puis le mot-symbole et la promesse de
+marque terminent la sequence. Cette signature dure moins de trois secondes,
+peut etre passee avec `Echap` et ne se rejoue pas pendant les navigations de la
+meme session.
 
 Le mode `prefers-reduced-motion` remplace la construction par une courte
 apparition statique. L'animation ne doit pas etre declenchee avant chaque film
