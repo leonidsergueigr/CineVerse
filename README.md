@@ -1,6 +1,66 @@
 # CineVerse
 
-Home cinema local auto-heberge, inspire des interfaces de streaming premium, avec catalogue TMDB, flux de nouveautes, recherche/filtrage, lecteur iframe configurable, suivi de progression et preferences persistantes.
+<p align="center">
+  <img src="public/brand/cineverse-social-card.svg" alt="CineVerse 1.0 - Votre cinema. Vos profils. Vos choix." width="100%" />
+</p>
+
+<p align="center">
+  <strong>Version 1.0.0</strong> · Home cinema local et auto-heberge
+</p>
+
+CineVerse rassemble catalogue TMDB, recherche avancee, lecteurs tiers,
+profils separes, suivi de progression et recommandations dans une interface
+pensee pour choisir puis reprendre rapidement un contenu.
+
+## Apercu
+
+<p align="center">
+  <img src="docs/screenshots/cineverse-splash-v1.png" alt="Signature de lancement animee CineVerse" width="72%" />
+  <br /><sub>Signature de lancement, jouee une fois par session</sub>
+</p>
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="docs/screenshots/cineverse-home-v1.png" alt="Accueil personnalise CineVerse" />
+      <br /><sub>Accueil programme pour le profil actif</sub>
+    </td>
+    <td width="50%">
+      <img src="docs/screenshots/cineverse-catalog-v1.png" alt="Catalogue et filtres CineVerse" />
+      <br /><sub>Catalogue TMDB et filtres combinables</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <img src="docs/screenshots/cineverse-watch-v1.png" alt="Lecteur de serie CineVerse" />
+      <br /><sub>Lecture multi-source, saisons et progression</sub>
+    </td>
+    <td width="50%">
+      <img src="docs/screenshots/cineverse-stats-v1.png" alt="Statistiques de profil CineVerse" />
+      <br /><sub>Statistiques et qualite des donnees par profil</sub>
+    </td>
+  </tr>
+</table>
+
+## Version 1.0
+
+La V1 est une base locale fonctionnelle qui couvre le parcours complet:
+
+- creation et selection de profils, avec PIN facultatif et donnees isolees;
+- signature de lancement animee, accessible et respectueuse de la preference
+  de reduction des mouvements;
+- accueil personnalise, reprise intelligente, watchlist et avis explicites;
+- recherche avec suggestions, catalogue et filtres avances combinables;
+- fiches films et series, saisons, episodes, langues et sources disponibles;
+- suivi hybride de lecture, auto-next et Companion optionnel pour les signaux
+  reels des lecteurs compatibles;
+- recommandations explicables et statistiques propres a chaque profil;
+- cache SQLite, demarrage local ou Docker et fonctionnement degrade sans TMDB.
+
+CineVerse n'heberge aucun flux video. La disponibilite et le suivi precis
+dependent des providers configures et de leurs capacites. Consulte
+[`CHANGELOG.md`](CHANGELOG.md) pour le perimetre de la release et
+[`docs/brand`](docs/brand/README.md) pour les assets de marque.
 
 ## Stack
 
@@ -35,6 +95,9 @@ cp .env.example .env
 Renseigne ensuite au moins `TMDB_ACCESS_TOKEN` ou `TMDB_API_KEY` dans `.env`
 pour utiliser le catalogue reel. Sans cle TMDB, CineVerse demarre avec un petit
 catalogue de secours. Le fichier `.env` est local et ne doit pas etre commite.
+Pour un deploiement accessible publiquement, renseigne aussi
+`CINEVERSE_BASE_URL` avec l'origine HTTPS finale afin de produire des liens de
+partage corrects.
 
 ### Lancer en local
 
