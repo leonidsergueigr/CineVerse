@@ -8,6 +8,7 @@ import {
   getDislikes,
   getLikes,
   getRecommendationExposures,
+  getRecommendationExclusions,
   getRecommendationLikes,
   getWatchlist,
 } from "@/lib/store";
@@ -32,6 +33,7 @@ export default async function Home() {
   const dislikes = getDislikes(profileId);
   const recommendationLikes = getRecommendationLikes(profileId);
   const exposures = getRecommendationExposures(profileId);
+  const exclusions = getRecommendationExclusions(profileId);
   const watchlist = getWatchlist(profileId);
   const profileItemRequests = [
     ...progress.map((item) => ({
@@ -51,6 +53,7 @@ export default async function Home() {
       dislikes,
       exposures,
       watchlist,
+      exclusions,
     ),
   ]);
   const refreshedItems = new Map<string, CatalogItem>();
@@ -84,6 +87,7 @@ export default async function Home() {
     watchlist: savedItems,
     recommendations,
     exposures,
+    exclusions,
   });
   if (!programmedCatalog.heroTrailerUrl) {
     programmedCatalog = {
@@ -100,8 +104,8 @@ export default async function Home() {
       catalog={programmedCatalog}
       initialLikedKeys={likes.map((like) => `${like.mediaType}-${like.tmdbId}`)}
       initialDislikedKeys={dislikes.map(
-        (item) => `${item.mediaType}-${item.tmdbId}`,
-      )}
+        (item) => item.exactExclusion ? `${item.mediaType}-${item.tmdbId}` : "",
+      ).filter(Boolean)}
       initialRecommendations={recommendations}
     />
   );

@@ -81,6 +81,24 @@ test("la migration hybride est additive, idempotente et prudente", () => {
   );
   assert.equal(
     database
+      .prepare("select count(*) as count from app_migrations where id = 'taste-history-v4'")
+      .get().count,
+    1,
+  );
+  assert.ok(
+    database
+      .prepare("select 1 from sqlite_master where type = 'table' and name = 'recommendation_suppressions'")
+      .get(),
+  );
+  const historyColumns = database
+    .prepare("pragma table_info(watch_history)")
+    .all()
+    .map((column) => column.name);
+  assert.ok(historyColumns.includes("imported_at"));
+  assert.ok(historyColumns.includes("watched_at"));
+  assert.ok(historyColumns.includes("history_origin"));
+  assert.equal(
+    database
       .prepare("select count(*) as count from app_migrations where id = 'browser-extension-tracking-v2'")
       .get().count,
     1,

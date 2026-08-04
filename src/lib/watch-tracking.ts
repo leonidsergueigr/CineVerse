@@ -20,6 +20,7 @@ export type CompletionSource =
   | "estimated"
   | "hybrid"
   | "manual"
+  | "manual_legacy"
   | "legacy"
   | "unknown";
 
@@ -174,16 +175,19 @@ export function capEstimatedSeconds(
 export function completionSignalWeight(source: CompletionSource) {
   switch (source) {
     case "provider":
-      return 1;
+      return 0.45;
     case "estimated":
-      return 0.9;
+      return 0.3;
     case "hybrid":
-      return 0.8;
+      return 0.25;
     case "manual":
+      return 0.5;
+    case "manual_legacy":
+      return 0;
     case "legacy":
-      return 0.7;
+      return 0.35;
     default:
-      return 0.6;
+      return 0.2;
   }
 }
 

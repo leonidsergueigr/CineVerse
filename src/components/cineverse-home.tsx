@@ -9,11 +9,12 @@ import {
   LoaderCircle,
   Play,
   RefreshCw,
+  SlidersHorizontal,
   Star,
   ThumbsDown,
   X,
 } from "lucide-react";
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties, FormEvent, ReactNode } from "react";
 import {
   useCallback,
   useEffect,
@@ -23,6 +24,7 @@ import {
   useTransition,
 } from "react";
 import { GENRES, LANGUAGES, SERIES_GENRES } from "@/lib/genres";
+import { parseGenreIds } from "@/lib/catalog-filters";
 import { trackClientEvent } from "@/lib/client-events";
 import type {
   BrowseCatalog,
@@ -324,6 +326,11 @@ export function CineVerseHome({
                 {hero.mediaType === "movie" ? "FILM" : "SERIE"}
               </span>
               <span>{yearOf(hero.releaseDate)}</span>
+              {hero.recentEpisode ? (
+                <span className="text-zinc-300">
+                  {recentEpisodeLabel(hero)}
+                </span>
+              ) : null}
               {hero.voteCount > 0 && hero.voteAverage > 0 ? (
                 <span className="inline-flex items-center gap-1">
                   <Star className="h-4 w-4 fill-[#f5c542] text-[#f5c542]" />
@@ -841,31 +848,235 @@ function youtubeVideoId(url: string) {
 
 function ActiveFilters({ filters }: { filters: CatalogFilters }) {
   const active = activeFilterLabels(filters);
-  if (!active.length) return null;
+  const [isOpen, setIsOpen] = useState(false);
 
   return (
-    <div className="mb-5 flex flex-wrap items-center gap-2">
-      <span className="mr-1 text-xs font-bold uppercase text-zinc-500">
-        Filtres actifs
-      </span>
-      {active.map((filter) => (
-        <Link
-          key={filter.key}
-          href={filterHrefWithout(filters, filter.key)}
-          className="inline-flex h-8 items-center gap-2 rounded border border-white/15 bg-white/[0.07] px-3 text-xs text-zinc-200 transition hover:border-[#e50914] hover:text-white"
-          title={`Retirer ${filter.label}`}
+    <div className="mb-5">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="mr-1 text-xs font-bold uppercase text-zinc-500">
+          Filtres actifs
+        </span>
+        {active.length ? (
+          active.map((filter) => (
+            <Link
+              key={filter.key}
+              href={filterHrefWithout(filters, filter.key)}
+              className="inline-flex h-8 items-center gap-2 rounded border border-white/15 bg-white/[0.07] px-3 text-xs text-zinc-200 transition hover:border-[#e50914] hover:text-white"
+              title={`Retirer ${filter.label}`}
+            >
+              {filter.label}
+              <X className="h-3.5 w-3.5 text-zinc-500" />
+            </Link>
+          ))
+        ) : (
+          <span className="text-xs text-zinc-600">Aucun</span>
+        )}
+        {active.length ? (
+          <Link
+            href="/browse"
+            className="ml-1 text-xs font-semibold text-zinc-500 transition hover:text-white"
+          >
+            Tout effacer
+          </Link>
+        ) : null}
+        <button
+          type="button"
+          onClick={() => setIsOpen((current) => !current)}
+          className="ml-auto inline-flex h-9 items-center gap-2 rounded border border-white/15 bg-white/[0.06] px-3 text-xs font-semibold text-zinc-200 transition hover:border-zinc-500 hover:text-white"
+          aria-expanded={isOpen}
+          aria-controls="advanced-catalog-filters"
         >
-          {filter.label}
-          <X className="h-3.5 w-3.5 text-zinc-500" />
-        </Link>
-      ))}
-      <Link
-        href="/browse"
-        className="ml-1 text-xs font-semibold text-zinc-500 transition hover:text-white"
-      >
-        Tout effacer
-      </Link>
+          <SlidersHorizontal className="h-4 w-4" />
+          {isOpen ? "Fermer" : "Ajouter des filtres"}
+        </button>
+      </div>
+      {isOpen ? <AdvancedFilterBuilder filters={filters} /> : null}
     </div>
+  );
+}
+
+function AdvancedFilterBuilder({ filters }: { filters: CatalogFilters }) {
+  const initialMode: "movie" | "tv" | "anime" =
+    filters.catalog === "anime"
+      ? "anime"
+      : filters.mediaType === "tv"
+        ? "tv"
+        : "movie";
+  const [mode, setMode] = useState<"movie" | "tv" | "anime">(initialMode);
+  const [selectedGenres, setSelectedGenres] = useState(() => parseGenreIds(filters.genre));
+  const [minRating, setMinRating] = useState(filters.minRating ?? "");
+  const [originalLanguage, setOriginalLanguage] = useState(
+    filters.originalLanguage ?? "",
+  );
+  const [yearFrom, setYearFrom] = useState(filters.yearFrom ?? "");
+  const [yearTo, setYearTo] = useState(filters.yearTo ?? "");
+  const availableGenres = mode === "movie" ? GENRES : SERIES_GENRES;
+
+  function changeMode(nextMode: "movie" | "tv" | "anime") {
+    setMode(nextMode);
+    setSelectedGenres([]);
+  }
+
+  function toggleGenre(genreId: string) {
+    setSelectedGenres((current) =>
+      current.includes(genreId)
+        ? current.filter((id) => id !== genreId)
+        : [...current, genreId],
+    );
+  }
+
+  function applyFilters(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const params = filterParams(filters);
+    params.delete("page");
+
+    if (mode === "anime") {
+      params.set("catalog", "anime");
+      params.set("type", "tv");
+    } else {
+      if (params.get("catalog") === "anime") params.delete("catalog");
+      params.set("type", mode);
+    }
+    setOrDelete(params, "genre", selectedGenres.join(","));
+    setOrDelete(params, "minRating", minRating);
+    setOrDelete(params, "originalLanguage", mode === "anime" ? "" : originalLanguage);
+    setOrDelete(params, "yearFrom", yearFrom);
+    setOrDelete(params, "yearTo", yearTo);
+
+    const query = params.toString();
+    window.location.href = query ? `/browse?${query}` : "/browse";
+  }
+
+  return (
+    <form
+      id="advanced-catalog-filters"
+      onSubmit={applyFilters}
+      className="mt-4 border-y border-white/10 bg-white/[0.025] px-3 py-4 sm:px-4"
+    >
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+        <div>
+          <span className="mb-2 block text-xs font-bold uppercase text-zinc-500">
+            Type de contenu
+          </span>
+          <div className="grid grid-cols-3 gap-2">
+            {([
+              ["movie", "Films"],
+              ["tv", "Séries"],
+              ["anime", "Animes"],
+            ] as const).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => changeMode(value)}
+                aria-pressed={mode === value}
+                className={`h-10 rounded border px-3 text-sm font-semibold transition ${
+                  mode === value
+                    ? "border-[#e50914] bg-[#e50914] text-white"
+                    : "border-white/10 bg-black/20 text-zinc-300 hover:border-zinc-500"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <fieldset>
+          <legend className="mb-2 text-xs font-bold uppercase text-zinc-500">
+            Genres à combiner
+          </legend>
+          <div className="flex flex-wrap gap-2">
+            {availableGenres.map((genre) => {
+              const genreId = String(genre.id);
+              const selected = selectedGenres.includes(genreId);
+              return (
+                <button
+                  key={genre.id}
+                  type="button"
+                  onClick={() => toggleGenre(genreId)}
+                  aria-pressed={selected}
+                  className={`h-8 rounded border px-3 text-xs transition ${
+                    selected
+                      ? "border-[#e50914] bg-[#e50914]/20 text-white"
+                      : "border-white/10 bg-black/20 text-zinc-400 hover:border-zinc-500 hover:text-white"
+                  }`}
+                >
+                  {genre.name}
+                </button>
+              );
+            })}
+          </div>
+          <p className="mt-2 text-xs text-zinc-600">
+            Plusieurs genres sélectionnés doivent tous être présents dans le résultat.
+          </p>
+        </fieldset>
+      </div>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <label className="text-xs font-semibold text-zinc-400">
+          Note minimum
+          <select
+            value={minRating}
+            onChange={(event) => setMinRating(event.target.value)}
+            className="mt-1 h-10 w-full rounded border border-white/10 bg-[#181818] px-3 text-sm text-white [color-scheme:dark]"
+          >
+            <option value="">Toutes les notes</option>
+            <option value="5">5 et plus</option>
+            <option value="6">6 et plus</option>
+            <option value="7">7 et plus</option>
+            <option value="8">8 et plus</option>
+          </select>
+        </label>
+        <label className="text-xs font-semibold text-zinc-400">
+          Langue originale
+          <select
+            value={originalLanguage}
+            onChange={(event) => setOriginalLanguage(event.target.value)}
+            disabled={mode === "anime"}
+            className="mt-1 h-10 w-full rounded border border-white/10 bg-[#181818] px-3 text-sm text-white disabled:cursor-not-allowed disabled:opacity-50 [color-scheme:dark]"
+          >
+            <option value="">Toutes les langues</option>
+            {LANGUAGES.map((language) => (
+              <option key={language.id} value={language.id}>
+                {language.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="text-xs font-semibold text-zinc-400">
+          Depuis
+          <input
+            type="number"
+            inputMode="numeric"
+            min="1900"
+            max="2100"
+            value={yearFrom}
+            onChange={(event) => setYearFrom(event.target.value)}
+            placeholder="Ex. 2000"
+            className="mt-1 h-10 w-full rounded border border-white/10 bg-[#181818] px-3 text-sm text-white placeholder:text-zinc-600"
+          />
+        </label>
+        <label className="text-xs font-semibold text-zinc-400">
+          Jusqu’à
+          <input
+            type="number"
+            inputMode="numeric"
+            min="1900"
+            max="2100"
+            value={yearTo}
+            onChange={(event) => setYearTo(event.target.value)}
+            placeholder="Ex. 2026"
+            className="mt-1 h-10 w-full rounded border border-white/10 bg-[#181818] px-3 text-sm text-white placeholder:text-zinc-600"
+          />
+        </label>
+        <button
+          type="submit"
+          className="h-10 self-end rounded bg-[#e50914] px-4 text-sm font-bold text-white transition hover:bg-[#f11b25]"
+        >
+          Appliquer les filtres
+        </button>
+      </div>
+    </form>
   );
 }
 
@@ -973,13 +1184,23 @@ function FilteredGrid({
             </Link>
           ),
         )}
-        <Link
-          href={pageHref(filters, Math.min(totalPages, currentPage + 1))}
-          className="inline-flex h-9 min-w-9 items-center justify-center bg-white/10 text-zinc-200"
-          aria-label="Page suivante"
-        >
-          <ChevronRight className="h-4 w-4" />
-        </Link>
+        {currentPage < totalPages ? (
+          <Link
+            href={pageHref(filters, currentPage + 1)}
+            className="inline-flex h-9 min-w-9 items-center justify-center bg-white/10 text-zinc-200 transition hover:bg-white/15"
+            aria-label="Page suivante"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </Link>
+        ) : (
+          <span
+            className="inline-flex h-9 min-w-9 cursor-not-allowed items-center justify-center bg-white/[0.04] text-zinc-700"
+            aria-label="Dernière page"
+            aria-disabled="true"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </span>
+        )}
       </div>
     </section>
   );
@@ -1155,9 +1376,11 @@ function MediaCard({
           <p className="mt-1 text-xs text-zinc-400">
             {item.resume
               ? resumeLabel(item)
-              : `${yearOf(item.releaseDate)} · ${
-                  item.mediaType === "movie" ? "Film" : "Serie"
-                }`}
+              : item.recentEpisode
+                ? recentEpisodeLabel(item)
+                : `${yearOf(item.releaseDate)} · ${
+                    item.mediaType === "movie" ? "Film" : "Serie"
+                  }`}
           </p>
           {reason ? (
             <p className="mt-2 line-clamp-2 text-xs leading-4 text-zinc-400">{reason}</p>
@@ -1217,6 +1440,15 @@ function resumeLabel(item: CatalogItem) {
   if (ratio < 0.1) return `${position} · Commence`;
   if (ratio < 0.9) return `${position} · En cours`;
   return `${position} · Presque termine`;
+}
+
+function recentEpisodeLabel(item: CatalogItem) {
+  if (!item.recentEpisode) return "";
+  const season =
+    item.recentEpisode.seasonNumber && item.recentEpisode.seasonNumber > 0
+      ? `S${item.recentEpisode.seasonNumber} `
+      : "";
+  return `Nouvel episode · ${season}E${item.recentEpisode.episodeNumber}`;
 }
 
 function sectionBrowseHref(sectionId: string) {
@@ -1312,6 +1544,12 @@ function filterParams(filters: CatalogFilters) {
   return params;
 }
 
+function setOrDelete(params: URLSearchParams, key: string, value: string) {
+  const normalized = value.trim();
+  if (normalized) params.set(key, normalized);
+  else params.delete(key);
+}
+
 function activeFilterLabels(filters: CatalogFilters) {
   const labels: Array<{ key: string; label: string }> = [];
   if (filters.query) labels.push({ key: "query", label: `Recherche : ${filters.query}` });
@@ -1335,8 +1573,13 @@ function activeFilterLabels(filters: CatalogFilters) {
       filters.catalog === "anime" || filters.mediaType === "tv"
         ? SERIES_GENRES
         : GENRES;
-    const genre = genres.find((item) => String(item.id) === filters.genre);
-    labels.push({ key: "genre", label: `Genre : ${genre?.name ?? filters.genre}` });
+    parseGenreIds(filters.genre).forEach((genreId) => {
+      const genre = genres.find((item) => String(item.id) === genreId);
+      labels.push({
+        key: `genre:${genreId}`,
+        label: `Genre : ${genre?.name ?? genreId}`,
+      });
+    });
   }
   if (filters.yearFrom || filters.yearTo) {
     const years =
@@ -1385,11 +1628,21 @@ function activeFilterLabels(filters: CatalogFilters) {
 
 function filterHrefWithout(filters: CatalogFilters, key: string) {
   const params = filterParams(filters);
+  if (key.startsWith("genre:")) {
+    const genreToRemove = key.slice("genre:".length);
+    const genres = parseGenreIds(filters.genre).filter(
+      (genre) => genre !== genreToRemove,
+    );
+    if (genres.length) params.set("genre", genres.join(","));
+    else params.delete("genre");
+    params.delete("page");
+    const query = params.toString();
+    return query ? `/browse?${query}` : "/browse";
+  }
   const queryKeys: Record<string, string[]> = {
     query: ["q"],
     catalog: ["catalog"],
     mediaType: ["type", "catalog", "genre"],
-    genre: ["genre"],
     year: ["yearFrom", "yearTo"],
     minRating: ["minRating"],
     originalLanguage: ["originalLanguage"],

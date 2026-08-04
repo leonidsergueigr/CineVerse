@@ -4,6 +4,7 @@ import { buildPersonalizedRecommendations } from "@/lib/recommendations";
 import {
   getDislikes,
   getRecommendationExposures,
+  getRecommendationExclusions,
   getRecommendationLikes,
   getWatchlist,
 } from "@/lib/store";
@@ -23,6 +24,7 @@ export async function GET() {
     getDislikes(profileId),
     getRecommendationExposures(profileId),
     getWatchlist(profileId),
+    getRecommendationExclusions(profileId),
   );
   return NextResponse.json(result, {
     headers: { "Cache-Control": "no-store" },

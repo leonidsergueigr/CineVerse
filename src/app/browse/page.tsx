@@ -42,8 +42,8 @@ export default async function BrowsePage({ searchParams }: PageProps) {
       catalog={catalog}
       initialLikedKeys={likes.map((like) => `${like.mediaType}-${like.tmdbId}`)}
       initialDislikedKeys={dislikes.map(
-        (item) => `${item.mediaType}-${item.tmdbId}`,
-      )}
+        (item) => item.exactExclusion ? `${item.mediaType}-${item.tmdbId}` : "",
+      ).filter(Boolean)}
     />
   );
 }

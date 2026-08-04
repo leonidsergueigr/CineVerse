@@ -14,6 +14,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { GENRES, LANGUAGES, SERIES_GENRES } from "@/lib/genres";
 import { trackClientEvent } from "@/lib/client-events";
 import type { SearchSuggestion } from "@/lib/types";
+import { CineVerseLogo } from "@/components/cineverse-logo";
 import { ProfileSwitcher } from "@/components/profile-switcher";
 
 type MenuKind = "movie" | "tv" | "anime";
@@ -67,9 +68,10 @@ export function SiteHeader({ query, fixed = true }: Props) {
             setProfileOpen(false);
             setMobileSearchOpen(false);
           }}
-          className="text-base font-black tracking-[0.1em] text-[#e50914] sm:text-2xl sm:tracking-[0.16em]"
+          aria-label="Accueil CineVerse"
+          className="inline-flex rounded-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#f20d19]"
         >
-          CineVerse
+          <CineVerseLogo responsive priority />
         </Link>
 
         <div className="hidden w-full max-w-xl md:block">

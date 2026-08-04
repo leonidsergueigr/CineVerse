@@ -33,6 +33,8 @@ export async function POST(request: NextRequest) {
     title: String(body.title ?? "Sans titre"),
     posterPath: body.posterPath ?? null,
     backdropPath: body.backdropPath ?? null,
+    genreIds: Array.isArray(body.genreIds) ? body.genreIds.map(Number) : [],
+    originalLanguage: String(body.originalLanguage ?? ""),
     included,
   });
 

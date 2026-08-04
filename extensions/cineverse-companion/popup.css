@@ -36,14 +36,9 @@ header p,
 }
 
 .brand-mark {
-  display: grid;
   width: 34px;
   height: 34px;
-  place-items: center;
-  border-radius: 6px;
-  background: #e50914;
-  font-size: 18px;
-  font-weight: 900;
+  object-fit: contain;
 }
 
 main {

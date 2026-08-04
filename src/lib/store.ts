@@ -27,9 +27,11 @@ import type {
   MediaType,
   Profile,
   RecommendationExposure,
+  RecommendationExclusion,
   RecommendationImpression,
   SeriesProgressSummary,
   ViewingEventType,
+  WatchHistoryRecord,
   WatchProgress,
   WatchlistRecord,
 } from "@/lib/types";
@@ -63,6 +65,8 @@ type LikeInput = {
   posterPath?: string | null;
   backdropPath?: string | null;
   liked: boolean;
+  signalStrength?: number;
+  signalOrigin?: LikeRecord["signalOrigin"];
 };
 
 type WatchlistInput = {
@@ -72,6 +76,8 @@ type WatchlistInput = {
   posterPath?: string | null;
   backdropPath?: string | null;
   included: boolean;
+  genreIds?: number[];
+  originalLanguage?: string;
 };
 
 type DislikeInput = {
@@ -83,6 +89,9 @@ type DislikeInput = {
   genreIds?: number[];
   originalLanguage?: string;
   disliked: boolean;
+  signalStrength?: number;
+  signalOrigin?: DislikeRecord["signalOrigin"];
+  exactExclusion?: boolean;
 };
 
 type DbDislike = {
@@ -94,6 +103,26 @@ type DbDislike = {
   genreIds: string;
   originalLanguage: string;
   dislikedAt: string;
+  signalStrength: number;
+  signalOrigin: NonNullable<DislikeRecord["signalOrigin"]>;
+  exactExclusion: 0 | 1;
+};
+
+export type HistoryImportEpisode = {
+  seasonNumber: number;
+  episodeNumber: number;
+};
+
+export type HistoryImportInput = {
+  tmdbId: number;
+  title: string;
+  posterPath?: string | null;
+  backdropPath?: string | null;
+  episodes: HistoryImportEpisode[];
+  seriesEpisodeCounts: Array<{ seasonNumber: number; episodeCount: number }>;
+  sentiment?: "liked" | "neutral" | "disliked";
+  genreIds?: number[];
+  originalLanguage?: string;
 };
 
 type ApiCacheRow = {
@@ -488,6 +517,9 @@ export function deleteProfile(profileId: string) {
     database
       .prepare("delete from recommendation_impressions where profile_id = ?")
       .run(profileId);
+    database
+      .prepare("delete from recommendation_suppressions where profile_id = ?")
+      .run(profileId);
     database.prepare("delete from profiles where id = ?").run(profileId);
   })();
   return true;
@@ -653,6 +685,7 @@ export function saveProgress(profileId: string, input: ProgressInput) {
     estimatedWatchSeconds: nonNegativeInteger(input.estimatedWatchSeconds),
     providerWatchSeconds: nonNegativeInteger(input.providerWatchSeconds),
     seriesEpisodeCounts,
+    watchedAt: completed && !previous?.completed ? Date.now() : null,
   };
 
   const updated = database
@@ -690,6 +723,11 @@ export function saveProgress(profileId: string, input: ProgressInput) {
           when @seriesEpisodeCounts = '[]' then series_episode_counts
           else @seriesEpisodeCounts
         end,
+        watched_at = coalesce(@watchedAt, watched_at),
+        history_origin = case
+          when @completed = 1 then 'tracking'
+          else history_origin
+        end,
         updated_at = datetime('now')
       where user_id = @profileId
         and tmdb_id = @tmdbId
@@ -709,13 +747,13 @@ export function saveProgress(profileId: string, input: ProgressInput) {
           poster_path, backdrop_path, progress_seconds, duration_seconds, completed,
           completion_source, tracking_confidence, manual_marked_at,
           estimated_watch_seconds, provider_watch_seconds,
-          series_episode_counts, updated_at
+          series_episode_counts, watched_at, history_origin, updated_at
         )
         values (@profileId, @tmdbId, @mediaType, @seasonNumber, @episodeNumber, @title,
           @posterPath, @backdropPath, @progressSeconds, @durationSeconds, @completed,
           @completionSource, @trackingConfidence, @manualMarkedAt,
           @estimatedWatchSeconds, @providerWatchSeconds,
-          @seriesEpisodeCounts, datetime('now'))
+          @seriesEpisodeCounts, @watchedAt, 'tracking', datetime('now'))
       `,
       )
       .run(payload);
@@ -901,6 +939,7 @@ export function getRecommendationLikes(
     >;
 
   for (const item of completed) {
+    if (item.completionSource === "manual_legacy") continue;
     const key = `${item.mediaType}:${item.tmdbId}`;
     if (seen.has(key)) continue;
     explicitLikes.push({
@@ -1273,14 +1312,29 @@ export function setLike(profileId: string, input: LikeInput) {
     database
       .prepare(
         `
-        insert into user_likes (user_id, tmdb_id, media_type, title, poster_path, backdrop_path, liked_at)
-        values (@profileId, @tmdbId, @mediaType, @title, @posterPath, @backdropPath, datetime('now'))
+        insert into user_likes (
+          user_id, tmdb_id, media_type, title, poster_path, backdrop_path,
+          liked_at, signal_strength, signal_origin
+        )
+        values (
+          @profileId, @tmdbId, @mediaType, @title, @posterPath, @backdropPath,
+          datetime('now'), @signalStrength, @signalOrigin
+        )
         on conflict(user_id, tmdb_id, media_type)
         do update set liked_at = datetime('now'), title = excluded.title,
-          poster_path = excluded.poster_path, backdrop_path = excluded.backdrop_path
+          poster_path = excluded.poster_path, backdrop_path = excluded.backdrop_path,
+          signal_strength = excluded.signal_strength,
+          signal_origin = excluded.signal_origin
       `,
       )
-      .run({ ...input, profileId });
+      .run({
+        ...input,
+        profileId,
+        posterPath: input.posterPath ?? null,
+        backdropPath: input.backdropPath ?? null,
+        signalStrength: clampSignalStrength(input.signalStrength, 1),
+        signalOrigin: input.signalOrigin ?? "liked",
+      });
   })();
 }
 
@@ -1289,7 +1343,8 @@ export function getLikes(profileId: string, limit = 24): LikeRecord[] {
     .prepare(
       `
       select tmdb_id as tmdbId, media_type as mediaType, title, poster_path as posterPath,
-        backdrop_path as backdropPath, liked_at as likedAt
+        backdrop_path as backdropPath, liked_at as likedAt,
+        signal_strength as signalStrength, signal_origin as signalOrigin
       from user_likes
       where user_id = ?
       order by liked_at desc
@@ -1314,15 +1369,35 @@ export function hasLike(
 
 export function setWatchlist(profileId: string, input: WatchlistInput) {
   if (!input.included) {
-    getDb()
+    const removed = getDb()
       .prepare(
         "delete from user_watchlist where user_id = ? and tmdb_id = ? and media_type = ?",
       )
       .run(profileId, input.tmdbId, input.mediaType);
+    if (removed.changes > 0) {
+      setDislike(profileId, {
+        ...input,
+        disliked: true,
+        signalStrength: 0.2,
+        signalOrigin: "watchlist_removed",
+        exactExclusion: false,
+      });
+    }
     return;
   }
 
-  getDb()
+  const database = getDb();
+  database
+    .prepare(
+      `
+      delete from user_dislikes
+      where user_id = ? and tmdb_id = ? and media_type = ?
+        and signal_origin = 'watchlist_removed' and exact_exclusion = 0
+      `,
+    )
+    .run(profileId, input.tmdbId, input.mediaType);
+
+  database
     .prepare(
       `
       insert into user_watchlist (
@@ -1336,7 +1411,12 @@ export function setWatchlist(profileId: string, input: WatchlistInput) {
         poster_path = excluded.poster_path, backdrop_path = excluded.backdrop_path
     `,
     )
-    .run({ ...input, profileId });
+    .run({
+      ...input,
+      profileId,
+      posterPath: input.posterPath ?? null,
+      backdropPath: input.backdropPath ?? null,
+    });
 }
 
 export function getWatchlist(
@@ -1383,33 +1463,49 @@ export function setDislike(profileId: string, input: DislikeInput) {
   }
 
   database.transaction(() => {
-    database
-      .prepare(
-        "delete from user_likes where user_id = ? and tmdb_id = ? and media_type = ?",
-      )
-      .run(profileId, input.tmdbId, input.mediaType);
+    if (input.exactExclusion !== false) {
+      database
+        .prepare(
+          "delete from user_likes where user_id = ? and tmdb_id = ? and media_type = ?",
+        )
+        .run(profileId, input.tmdbId, input.mediaType);
+    }
     database
       .prepare(
         `
         insert into user_dislikes (
           user_id, tmdb_id, media_type, title, poster_path, backdrop_path,
-          genre_ids, original_language, disliked_at
+          genre_ids, original_language, disliked_at, signal_strength,
+          signal_origin, exact_exclusion
         )
         values (
           @profileId, @tmdbId, @mediaType, @title, @posterPath, @backdropPath,
-          @genreIds, @originalLanguage, datetime('now')
+          @genreIds, @originalLanguage, datetime('now'), @signalStrength,
+          @signalOrigin, @exactExclusion
         )
         on conflict(user_id, tmdb_id, media_type)
         do update set disliked_at = datetime('now'), title = excluded.title,
           poster_path = excluded.poster_path, backdrop_path = excluded.backdrop_path,
-          genre_ids = excluded.genre_ids, original_language = excluded.original_language
+          genre_ids = excluded.genre_ids, original_language = excluded.original_language,
+          signal_strength = max(user_dislikes.signal_strength, excluded.signal_strength),
+          exact_exclusion = max(user_dislikes.exact_exclusion, excluded.exact_exclusion),
+          signal_origin = case
+            when excluded.exact_exclusion = 1 then excluded.signal_origin
+            when excluded.signal_strength >= user_dislikes.signal_strength then excluded.signal_origin
+            else user_dislikes.signal_origin
+          end
       `,
       )
       .run({
         ...input,
         profileId,
+        posterPath: input.posterPath ?? null,
+        backdropPath: input.backdropPath ?? null,
         genreIds: JSON.stringify(input.genreIds ?? []),
         originalLanguage: input.originalLanguage ?? "",
+        signalStrength: clampSignalStrength(input.signalStrength, 1),
+        signalOrigin: input.signalOrigin ?? "explicit",
+        exactExclusion: input.exactExclusion === false ? 0 : 1,
       });
   })();
 }
@@ -1421,7 +1517,8 @@ export function getDislikes(profileId: string, limit = 48): DislikeRecord[] {
       select tmdb_id as tmdbId, media_type as mediaType, title,
         poster_path as posterPath, backdrop_path as backdropPath,
         genre_ids as genreIds, original_language as originalLanguage,
-        disliked_at as dislikedAt
+        disliked_at as dislikedAt, signal_strength as signalStrength,
+        signal_origin as signalOrigin, exact_exclusion as exactExclusion
       from user_dislikes
       where user_id = ?
       order by disliked_at desc
@@ -1433,6 +1530,7 @@ export function getDislikes(profileId: string, limit = 48): DislikeRecord[] {
   return rows.map((row) => ({
     ...row,
     genreIds: parseNumberArray(row.genreIds),
+    exactExclusion: Boolean(row.exactExclusion),
   }));
 }
 
@@ -1443,10 +1541,291 @@ export function hasDislike(
 ) {
   const row = getDb()
     .prepare(
-      "select 1 from user_dislikes where user_id = ? and tmdb_id = ? and media_type = ? limit 1",
+      "select 1 from user_dislikes where user_id = ? and tmdb_id = ? and media_type = ? and exact_exclusion = 1 limit 1",
     )
     .get(profileId, tmdbId, mediaType);
   return Boolean(row);
+}
+
+export function getWatchHistory(profileId: string): WatchHistoryRecord[] {
+  return getDb()
+    .prepare(
+      `
+      select tmdb_id as tmdbId, media_type as mediaType,
+        completed, completion_source as completionSource,
+        tracking_confidence as trackingConfidence,
+        imported_at as importedAt, watched_at as watchedAt,
+        progress_seconds as activePlaybackSeconds,
+        provider_watch_seconds as extensionMeasuredSeconds,
+        estimated_watch_seconds as estimatedSeconds,
+        season_number as seasonNumber, episode_number as episodeNumber
+      from watch_history
+      where user_id = ? and (completed = 1 or progress_seconds > 0)
+      order by id desc
+      `,
+    )
+    .all(profileId) as WatchHistoryRecord[];
+}
+
+export function getRecommendationExclusions(
+  profileId: string,
+): RecommendationExclusion[] {
+  const now = Date.now();
+  const rows = getDb()
+    .prepare(
+      `
+      select tmdb_id as tmdbId, media_type as mediaType, 'liked' as reason,
+        null as expiresAt
+      from user_likes where user_id = ?
+      union all
+      select tmdb_id, media_type, 'disliked', null
+      from user_dislikes where user_id = ? and exact_exclusion = 1
+      union all
+      select tmdb_id, media_type, 'watchlist', null
+      from user_watchlist where user_id = ?
+      union all
+      select distinct tmdb_id, media_type, 'watched', null
+      from watch_history
+      where user_id = ? and (completed = 1 or progress_seconds > 0)
+      union all
+      select tmdb_id, media_type, reason, expires_at
+      from recommendation_suppressions
+      where profile_id = ? and (expires_at is null or expires_at > ?)
+      `,
+    )
+    .all(
+      profileId,
+      profileId,
+      profileId,
+      profileId,
+      profileId,
+      now,
+    ) as RecommendationExclusion[];
+
+  return rows;
+}
+
+export function setRecommendationSuppression(
+  profileId: string,
+  input: {
+    tmdbId: number;
+    mediaType: MediaType;
+    reason: "not-now" | "never";
+    days?: number;
+  },
+) {
+  const now = Date.now();
+  const expiresAt = input.reason === "not-now"
+    ? now + Math.max(1, Math.min(30, input.days ?? 7)) * 24 * 60 * 60 * 1000
+    : null;
+  getDb()
+    .prepare(
+      `
+      insert into recommendation_suppressions (
+        profile_id, tmdb_id, media_type, reason, expires_at, created_at
+      ) values (?, ?, ?, ?, ?, ?)
+      on conflict(profile_id, tmdb_id, media_type)
+      do update set
+        reason = case
+          when recommendation_suppressions.reason = 'never' then 'never'
+          else excluded.reason
+        end,
+        expires_at = case
+          when recommendation_suppressions.reason = 'never' then null
+          else excluded.expires_at
+        end,
+        created_at = excluded.created_at
+      `,
+    )
+    .run(
+      profileId,
+      Math.floor(input.tmdbId),
+      input.mediaType,
+      input.reason,
+      expiresAt,
+      now,
+    );
+  return { reason: input.reason, expiresAt };
+}
+
+export function importWatchHistory(
+  profileId: string,
+  input: HistoryImportInput,
+) {
+  if (!getProfile(profileId)) throw new Error("Profil introuvable.");
+  const episodeCounts = sanitizeEpisodeCounts(input.seriesEpisodeCounts);
+  const available = new Map(
+    episodeCounts.map((item) => [item.seasonNumber, item.episodeCount]),
+  );
+  const episodes = uniqueHistoryEpisodes(input.episodes).filter(
+    (item) =>
+      item.seasonNumber > 0 &&
+      item.episodeNumber > 0 &&
+      item.episodeNumber <= (available.get(item.seasonNumber) ?? 0),
+  );
+  if (!episodes.length) return { imported: 0, alreadyKnown: 0 };
+
+  const database = getDb();
+  const now = Date.now();
+  const statement = database.prepare(
+    `
+    insert into watch_history (
+      user_id, tmdb_id, media_type, season_number, episode_number, title,
+      poster_path, backdrop_path, progress_seconds, duration_seconds,
+      completed, completion_source, tracking_confidence, manual_marked_at,
+      estimated_watch_seconds, provider_watch_seconds, series_episode_counts,
+      imported_at, watched_at, history_origin, updated_at
+    ) values (
+      @profileId, @tmdbId, 'tv', @seasonNumber, @episodeNumber, @title,
+      @posterPath, @backdropPath, 0, 0,
+      1, 'manual_legacy', 'low', null,
+      0, 0, @seriesEpisodeCounts,
+      @importedAt, null, 'import', datetime('now')
+    )
+    on conflict(user_id, tmdb_id, media_type, season_number, episode_number)
+    do update set
+      title = excluded.title,
+      poster_path = coalesce(excluded.poster_path, watch_history.poster_path),
+      backdrop_path = coalesce(excluded.backdrop_path, watch_history.backdrop_path),
+      completed = 1,
+      completion_source = case
+        when watch_history.completed = 1 then watch_history.completion_source
+        else 'manual_legacy'
+      end,
+      tracking_confidence = case
+        when watch_history.completed = 1 then watch_history.tracking_confidence
+        else 'low'
+      end,
+      series_episode_counts = excluded.series_episode_counts,
+      imported_at = case
+        when watch_history.completed = 1 then watch_history.imported_at
+        else coalesce(watch_history.imported_at, excluded.imported_at)
+      end,
+      history_origin = case
+        when watch_history.completed = 1 then watch_history.history_origin
+        else 'import'
+      end
+    `,
+  );
+  const existing = database.prepare(
+    `
+    select 1 from watch_history
+    where user_id = ? and tmdb_id = ? and media_type = 'tv'
+      and season_number = ? and episode_number = ? and completed = 1
+    limit 1
+    `,
+  );
+  const payload = {
+    profileId,
+    tmdbId: Math.floor(input.tmdbId),
+    title: normalizeEventText(input.title, 180) || "Serie",
+    posterPath: input.posterPath ?? null,
+    backdropPath: input.backdropPath ?? null,
+    seriesEpisodeCounts: JSON.stringify(episodeCounts),
+    importedAt: now,
+  };
+  const result = database.transaction(() => {
+    let alreadyKnown = 0;
+    for (const item of episodes) {
+      if (
+        existing.get(
+          profileId,
+          payload.tmdbId,
+          item.seasonNumber,
+          item.episodeNumber,
+        )
+      ) {
+        alreadyKnown += 1;
+      }
+      statement.run({ ...payload, ...item });
+    }
+    return { imported: episodes.length - alreadyKnown, alreadyKnown };
+  })();
+
+  if (input.sentiment === "liked") {
+    setLike(profileId, {
+      ...input,
+      mediaType: "tv",
+      liked: true,
+      signalOrigin: "manual_legacy",
+      signalStrength: 0.5,
+    });
+  } else if (input.sentiment === "disliked") {
+    setDislike(profileId, {
+      ...input,
+      mediaType: "tv",
+      disliked: true,
+      signalOrigin: "manual_legacy",
+      signalStrength: 0.5,
+      exactExclusion: true,
+    });
+  }
+
+  return result;
+}
+
+export function importLegacyTitleHistory(
+  profileId: string,
+  input: {
+    tmdbId: number;
+    mediaType: MediaType;
+    seasonNumber?: number | null;
+    episodeNumber?: number | null;
+    title: string;
+    posterPath?: string | null;
+    backdropPath?: string | null;
+    seriesEpisodeCounts?: HistoryImportInput["seriesEpisodeCounts"];
+  },
+) {
+  const database = getDb();
+  const existing = database
+    .prepare(
+      `
+      select completed from watch_history
+      where user_id = ? and tmdb_id = ? and media_type = ?
+        and coalesce(season_number, -1) = coalesce(?, -1)
+        and coalesce(episode_number, -1) = coalesce(?, -1)
+      limit 1
+      `,
+    )
+    .get(
+      profileId,
+      input.tmdbId,
+      input.mediaType,
+      input.seasonNumber ?? null,
+      input.episodeNumber ?? null,
+    ) as { completed: 0 | 1 } | undefined;
+  if (existing?.completed) return { imported: false, alreadyKnown: true };
+
+  saveProgress(profileId, {
+    ...input,
+    progressSeconds: 0,
+    durationSeconds: 0,
+    completed: true,
+    completionSource: "manual_legacy",
+    trackingConfidence: "low",
+    estimatedWatchSeconds: 0,
+    providerWatchSeconds: 0,
+  });
+  database
+    .prepare(
+      `
+      update watch_history set imported_at = coalesce(imported_at, ?),
+        watched_at = null, history_origin = 'import'
+      where user_id = ? and tmdb_id = ? and media_type = ?
+        and coalesce(season_number, -1) = coalesce(?, -1)
+        and coalesce(episode_number, -1) = coalesce(?, -1)
+      `,
+    )
+    .run(
+      Date.now(),
+      profileId,
+      input.tmdbId,
+      input.mediaType,
+      input.seasonNumber ?? null,
+      input.episodeNumber ?? null,
+    );
+  return { imported: true, alreadyKnown: false };
 }
 
 type DbProgress = {
@@ -1659,6 +2038,29 @@ function parseNumberArray(value: string) {
   } catch {
     return [];
   }
+}
+
+function uniqueHistoryEpisodes(episodes: HistoryImportEpisode[]) {
+  const unique = new Map<string, HistoryImportEpisode>();
+  for (const item of episodes) {
+    const seasonNumber = Math.floor(Number(item.seasonNumber));
+    const episodeNumber = Math.floor(Number(item.episodeNumber));
+    if (!Number.isFinite(seasonNumber) || !Number.isFinite(episodeNumber)) {
+      continue;
+    }
+    unique.set(`${seasonNumber}:${episodeNumber}`, {
+      seasonNumber,
+      episodeNumber,
+    });
+  }
+  return [...unique.values()].slice(0, 5000);
+}
+
+function clampSignalStrength(value: number | undefined, fallback: number) {
+  const strength = Number(value);
+  return Number.isFinite(strength)
+    ? Math.max(0, Math.min(1, strength))
+    : fallback;
 }
 
 function measuredWatchSeconds(

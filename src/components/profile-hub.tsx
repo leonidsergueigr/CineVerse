@@ -17,6 +17,7 @@ import {
   PROFILE_PIN_LENGTH,
 } from "@/lib/profile-constants";
 import type { Profile } from "@/lib/types";
+import { CineVerseLogo } from "@/components/cineverse-logo";
 
 type HubMode = "select" | "manage" | "create" | "edit" | "delete" | "unlock";
 
@@ -230,9 +231,7 @@ export function ProfileHub({
   return (
     <main className="flex min-h-screen flex-col overflow-hidden bg-[#050505] text-white">
       <header className="flex h-20 items-center justify-center border-b border-white/10 px-5">
-        <div className="text-2xl font-black text-[#e50914] sm:text-3xl">
-          CineVerse
-        </div>
+        <CineVerseLogo size="large" priority />
       </header>
 
       <section className="relative mx-auto flex w-full max-w-6xl flex-1 flex-col items-center justify-center px-5 py-10 sm:px-8">

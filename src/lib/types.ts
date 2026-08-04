@@ -23,6 +23,13 @@ export type CatalogItem = {
   popularity: number;
   genreIds: number[];
   originalLanguage: string;
+  recentEpisode?: {
+    seasonNumber: number | null;
+    episodeNumber: number;
+    totalEpisodes: number | null;
+    airDate: string | null;
+    source: "fstream" | "tmdb";
+  };
   resume?: {
     seasonNumber: number | null;
     episodeNumber: number | null;
@@ -192,7 +199,7 @@ export type LikeRecord = {
   backdropPath: string | null;
   likedAt: string;
   signalStrength?: number;
-  signalOrigin?: "liked" | "completed";
+  signalOrigin?: "liked" | "completed" | "manual_legacy";
   completionSource?: import("@/lib/watch-tracking").CompletionSource;
 };
 
@@ -214,6 +221,37 @@ export type DislikeRecord = {
   genreIds: number[];
   originalLanguage: string;
   dislikedAt: string;
+  signalStrength?: number;
+  signalOrigin?: "explicit" | "abandoned" | "watchlist_removed" | "manual_legacy";
+  exactExclusion?: boolean;
+};
+
+export type WatchHistoryRecord = {
+  tmdbId: number;
+  mediaType: MediaType;
+  completed: boolean;
+  completionSource: import("@/lib/watch-tracking").CompletionSource;
+  trackingConfidence: import("@/lib/watch-tracking").TrackingConfidence;
+  importedAt: number | null;
+  watchedAt: number | null;
+  activePlaybackSeconds: number;
+  extensionMeasuredSeconds: number;
+  estimatedSeconds: number;
+  seasonNumber: number | null;
+  episodeNumber: number | null;
+};
+
+export type RecommendationExclusion = {
+  tmdbId: number;
+  mediaType: MediaType;
+  reason:
+    | "liked"
+    | "disliked"
+    | "watchlist"
+    | "watched"
+    | "not-now"
+    | "never";
+  expiresAt?: number | null;
 };
 
 export type ViewingEventType =

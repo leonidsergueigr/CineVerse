@@ -3,11 +3,18 @@
 import Link from "next/link";
 import {
   ArrowLeft,
+  Ban,
   Check,
+  Clock3,
+  Eye,
   Heart,
+  History,
   Info,
   Languages,
   ListPlus,
+  Maximize2,
+  Minimize2,
+  MoreHorizontal,
   Play,
   SkipForward,
   Star,
@@ -15,7 +22,15 @@ import {
   X,
   ZoomIn,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import { buildEmbedUrl, getProviderLanguages } from "@/lib/providers";
 import {
   createProviderTrackingAdapter,
@@ -27,6 +42,7 @@ import { useWatchSessionTracker } from "@/hooks/use-watch-session-tracker";
 import { rewindResumePosition } from "@/lib/playback-intelligence-core";
 import { TRACKING_CONFIG } from "@/lib/watch-tracking";
 import { SiteHeader } from "@/components/site-header";
+import { SeriesHistoryImport } from "@/components/series-history-import";
 import type {
   EmbedProvider,
   EpisodeInfo,
@@ -102,6 +118,8 @@ export function WatchExperience({
   );
   const [overviewExpanded, setOverviewExpanded] = useState(false);
   const [posterExpanded, setPosterExpanded] = useState(false);
+  const [historyImportOpen, setHistoryImportOpen] = useState(false);
+  const [feedbackMessage, setFeedbackMessage] = useState("");
   const [learnedPlaybackSegments, setLearnedPlaybackSegments] = useState(
     initialLearnedPlaybackSegments,
   );
@@ -116,6 +134,7 @@ export function WatchExperience({
   const [trackingAvailable, setTrackingAvailable] = useState(false);
   const [companionAvailable, setCompanionAvailable] = useState(false);
   const [companionTrackingActive, setCompanionTrackingActive] = useState(false);
+  const [playerFullscreen, setPlayerFullscreen] = useState(false);
   const [progress, setProgress] = useState({
     currentTime: initialProgress?.progressSeconds ?? 0,
     duration: initialProgress?.durationSeconds ?? 0,
@@ -138,6 +157,7 @@ export function WatchExperience({
   const activeObserverSessionRef = useRef("");
   const playbackSelectionChangedAtRef = useRef(Date.now());
   const playerFrameRef = useRef<HTMLIFrameElement>(null);
+  const playerShellRef = useRef<HTMLElement>(null);
   const fallbackProgressRef = useRef(initialProgress?.progressSeconds ?? 0);
   const latestDurationRef = useRef(initialProgress?.durationSeconds ?? 0);
   const trackingDetectedRef = useRef(false);
@@ -858,6 +878,7 @@ export function WatchExperience({
           posterPath: detail.posterPath,
           backdropPath: detail.backdropPath,
           genreIds: detail.genreIds,
+          originalLanguage: detail.originalLanguage,
           timezoneOffsetMinutes: new Date().getTimezoneOffset(),
           liked: next,
         }),
@@ -913,6 +934,7 @@ export function WatchExperience({
           posterPath: detail.posterPath,
           backdropPath: detail.backdropPath,
           genreIds: detail.genreIds,
+          originalLanguage: detail.originalLanguage,
           timezoneOffsetMinutes: new Date().getTimezoneOffset(),
           included: next,
         }),
@@ -1031,6 +1053,40 @@ export function WatchExperience({
     }
   }
 
+  async function submitRecommendationFeedback(action: "seen" | "not-now" | "never") {
+    if (action === "seen" && detail.mediaType === "tv") {
+      setHistoryImportOpen(true);
+      return;
+    }
+    const response = await fetch("/api/recommendations/feedback", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        tmdbId: detail.id,
+        mediaType: detail.mediaType,
+        title: detail.title,
+        posterPath: detail.posterPath,
+        backdropPath: detail.backdropPath,
+        seasonNumber: season,
+        episodeNumber: episode,
+        seriesEpisodeCounts,
+        action,
+      }),
+    });
+    if (!response.ok) {
+      setFeedbackMessage("Cette action n'a pas pu etre enregistree.");
+      return;
+    }
+    if (action === "seen") setCompleted(true);
+    setFeedbackMessage(
+      action === "seen"
+        ? "Ajoute a votre historique sans temps invente."
+        : action === "not-now"
+          ? "Masque des recommandations pendant 7 jours."
+          : "Ce titre ne sera plus recommande.",
+    );
+  }
+
   useEffect(() => {
     if (detail.mediaType !== "tv") return;
     const controller = new AbortController();
@@ -1144,6 +1200,39 @@ export function WatchExperience({
       .catch(() => undefined);
     return () => controller.abort();
   }, [detail.id, detail.mediaType, season]);
+
+  useEffect(() => {
+    function updateFullscreenState() {
+      const fullscreenElement = document.fullscreenElement;
+      setPlayerFullscreen(
+        Boolean(
+          fullscreenElement &&
+            playerShellRef.current?.contains(fullscreenElement),
+        ),
+      );
+    }
+
+    document.addEventListener("fullscreenchange", updateFullscreenState);
+    return () =>
+      document.removeEventListener("fullscreenchange", updateFullscreenState);
+  }, []);
+
+  async function togglePlayerFullscreen() {
+    const playerShell = playerShellRef.current;
+    if (!playerShell) return;
+
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else {
+        await playerShell.requestFullscreen({ navigationUI: "hide" });
+      }
+    } catch {
+      setFeedbackMessage(
+        "Le navigateur a refuse le plein ecran. Autorisez-le pour ce site puis reessayez.",
+      );
+    }
+  }
 
   function skipIntroduction() {
     if (!learnedIntro) return;
@@ -1286,6 +1375,22 @@ export function WatchExperience({
           />
         </div>
       ) : null}
+      {detail.mediaType === "tv" ? (
+        <SeriesHistoryImport
+          detail={detail}
+          currentSeason={season}
+          currentEpisode={episode}
+          open={historyImportOpen}
+          onOpenChange={setHistoryImportOpen}
+          onImported={({ seriesProgress: importedProgress, currentEpisodeImported, episodeCount }) => {
+            if (importedProgress) setSeriesProgress(importedProgress);
+            if (currentEpisodeImported) setCompleted(true);
+            setFeedbackMessage(
+              `${episodeCount} episode${episodeCount > 1 ? "s" : ""} ajoute${episodeCount > 1 ? "s" : ""} a l'historique.`,
+            );
+          }}
+        />
+      ) : null}
       <div className="relative" id="watch-player">
         <div className="absolute inset-x-0 top-0 z-20 bg-gradient-to-b from-black to-transparent">
           <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
@@ -1299,7 +1404,25 @@ export function WatchExperience({
           </div>
         </div>
 
-        <section className="relative h-[46svh] min-h-[320px] max-h-[650px] overflow-hidden bg-black sm:h-[58vh]">
+        <section
+          ref={playerShellRef}
+          className="relative h-[46svh] min-h-[320px] max-h-[650px] overflow-hidden bg-black fullscreen:h-screen fullscreen:max-h-none fullscreen:w-screen sm:h-[58vh]"
+        >
+          {started && playerSrc ? (
+            <button
+              type="button"
+              onClick={togglePlayerFullscreen}
+              className="absolute right-4 top-3 z-30 inline-flex h-10 w-10 items-center justify-center rounded bg-black/70 text-white ring-1 ring-white/20 transition hover:bg-white hover:text-black"
+              aria-label={playerFullscreen ? "Quitter le plein écran" : "Mettre en plein écran"}
+              title={playerFullscreen ? "Quitter le plein écran" : "Plein écran CineVerse"}
+            >
+              {playerFullscreen ? (
+                <Minimize2 className="h-5 w-5" />
+              ) : (
+                <Maximize2 className="h-5 w-5" />
+              )}
+            </button>
+          ) : null}
           {started && playerSrc ? (
             <iframe
               key={playerSrc}
@@ -1310,7 +1433,7 @@ export function WatchExperience({
                 window.setTimeout(seekPlayerToResume, 500);
                 window.setTimeout(requestPlayerState, 1000);
               }}
-              allow="autoplay; fullscreen; picture-in-picture"
+              allow="autoplay *; fullscreen *; picture-in-picture *"
               allowFullScreen
               referrerPolicy="no-referrer"
               sandbox="allow-presentation allow-same-origin allow-scripts"
@@ -1988,22 +2111,40 @@ export function WatchExperience({
                     />
                     J&apos;aime
                   </button>
-                  <button
-                    type="button"
-                    onClick={dislike}
-                    aria-pressed={disliked}
-                    className={`inline-flex h-10 items-center justify-center gap-2 rounded px-2 text-xs font-bold ring-1 transition ${
-                      disliked
-                        ? "bg-white/15 text-white ring-white/25"
-                        : "bg-transparent text-zinc-300 ring-white/10 hover:bg-white/[0.06]"
-                    }`}
-                  >
-                    <ThumbsDown
-                      className={`h-4 w-4 ${disliked ? "fill-current" : ""}`}
-                    />
-                    <span className="whitespace-nowrap">Pas pour moi</span>
-                  </button>
+                  <details className="group relative">
+                    <summary className="flex h-10 cursor-pointer list-none items-center justify-center gap-2 rounded px-2 text-xs font-bold text-zinc-300 ring-1 ring-white/10 transition hover:bg-white/[0.06] [&::-webkit-details-marker]:hidden">
+                      <MoreHorizontal className="h-4 w-4" />
+                      Plus de choix
+                    </summary>
+                    <div className="absolute bottom-12 right-0 z-40 w-60 overflow-hidden rounded border border-white/15 bg-[#181818] p-1.5 shadow-2xl">
+                      <FeedbackAction
+                        icon={<Eye className="h-4 w-4" />}
+                        label="Deja vu"
+                        onClick={() => void submitRecommendationFeedback("seen")}
+                      />
+                      <FeedbackAction
+                        icon={<ThumbsDown className="h-4 w-4" />}
+                        label={disliked ? "Retirer Pas pour moi" : "Pas pour moi"}
+                        onClick={dislike}
+                      />
+                      <FeedbackAction
+                        icon={<Clock3 className="h-4 w-4" />}
+                        label="Pas maintenant"
+                        onClick={() => void submitRecommendationFeedback("not-now")}
+                      />
+                      <FeedbackAction
+                        icon={<Ban className="h-4 w-4" />}
+                        label="Ne plus recommander"
+                        onClick={() => void submitRecommendationFeedback("never")}
+                      />
+                    </div>
+                  </details>
                 </div>
+                {feedbackMessage ? (
+                  <p className="mt-3 text-xs leading-5 text-zinc-400">
+                    {feedbackMessage}
+                  </p>
+                ) : null}
               </div>
 
               <button
@@ -2019,6 +2160,16 @@ export function WatchExperience({
                 <Check className="h-4 w-4" />
                 {completed ? "Marquer comme non vu" : "Marquer vu"}
               </button>
+              {detail.mediaType === "tv" ? (
+                <button
+                  type="button"
+                  onClick={() => setHistoryImportOpen(true)}
+                  className="mt-2 inline-flex h-10 w-full items-center justify-center gap-2 rounded px-3 text-xs font-bold text-zinc-400 ring-1 ring-white/10 transition hover:bg-white/[0.06] hover:text-white"
+                >
+                  <History className="h-4 w-4" />
+                  J&apos;ai deja regarde...
+                </button>
+              ) : null}
             </section>
           </aside>
         </div>
@@ -2191,6 +2342,30 @@ function parseJson(value: string) {
   } catch {
     return null;
   }
+}
+
+function FeedbackAction({
+  icon,
+  label,
+  onClick,
+}: {
+  icon: ReactNode;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={(event) => {
+        onClick();
+        event.currentTarget.closest("details")?.removeAttribute("open");
+      }}
+      className="flex min-h-10 w-full items-center gap-3 rounded px-3 text-left text-xs font-semibold text-zinc-300 hover:bg-white/10 hover:text-white"
+    >
+      {icon}
+      {label}
+    </button>
+  );
 }
 
 function getNextEpisodeSelection(

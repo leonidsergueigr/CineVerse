@@ -150,8 +150,9 @@ test("l'estimation est plafonnee a 1,5 fois la duree officielle", () => {
 });
 
 test("les sources de completion ont des poids de recommandation distincts", () => {
-  assert.equal(completionSignalWeight("provider"), 1);
-  assert.equal(completionSignalWeight("estimated"), 0.9);
-  assert.equal(completionSignalWeight("hybrid"), 0.8);
-  assert.equal(completionSignalWeight("manual"), 0.7);
+  assert.equal(completionSignalWeight("provider"), 0.45);
+  assert.equal(completionSignalWeight("estimated"), 0.3);
+  assert.equal(completionSignalWeight("hybrid"), 0.25);
+  assert.equal(completionSignalWeight("manual"), 0.5);
+  assert.equal(completionSignalWeight("manual_legacy"), 0);
 });

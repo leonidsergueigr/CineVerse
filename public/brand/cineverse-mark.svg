@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">Symbole CineVerse</title>
+  <desc id="desc">Un C rouge entourant un bouton de lecture blanc.</desc>
+  <path
+    d="M49 14A24 24 0 1 0 49 50"
+    fill="none"
+    stroke="#f20d19"
+    stroke-linecap="square"
+    stroke-width="10"
+  />
+  <path d="M27 21.5 45 32 27 42.5Z" fill="#fff" />
+</svg>

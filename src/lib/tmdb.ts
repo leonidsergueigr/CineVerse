@@ -2,6 +2,12 @@ import { fallbackCatalog, fallbackDetails } from "@/lib/fallback-data";
 import { load } from "cheerio";
 import dns from "node:dns";
 import Fuse from "fuse.js";
+import { genreIdsForMediaType } from "@/lib/catalog-filters";
+import {
+  isRecentlyAired,
+  parseEpisodeProgress,
+  recentDateCutoff,
+} from "@/lib/catalog-freshness";
 import {
   fetchFstreamCatalogPage,
   rememberFstreamCatalogMatch,
@@ -102,6 +108,11 @@ type TmdbDetails = TmdbResult & {
     season_number: number;
     episode_count: number;
   }>;
+  last_episode_to_air?: {
+    air_date?: string | null;
+    episode_number?: number;
+    season_number?: number;
+  } | null;
 };
 
 type TmdbEpisodeDetails = {
@@ -126,6 +137,8 @@ type SourceCatalogItem = {
   posterPath: string | null;
   newsId: string | null;
   seasonNumber: number | null;
+  episodeNumber: number | null;
+  totalEpisodes: number | null;
 };
 
 export async function getHomeCatalog(): Promise<HomeCatalog> {
@@ -239,13 +252,16 @@ export async function discoverWithMeta(filters: CatalogFilters, withFallback = f
     page: normalizedPage(filters.page),
   };
 
-  const genre = genreForMediaType(filters.genre, mediaType);
+  const genres = genreIdsForMediaType(filters.genre, mediaType);
   if (isAnime) {
-    params.with_genres = genre && genre !== "16" ? `16,${genre}` : "16";
+    params.with_genres = ["16", ...genres.filter((genre) => genre !== "16")].join(",");
     params.with_original_language = "ja";
   } else {
-    if (genre) params.with_genres = genre;
-    if (mediaType === "tv" && !genre) params.without_genres = "16";
+    if (genres.length) params.with_genres = genres.join(",");
+    if (mediaType === "tv" && !genres.length) params.without_genres = "16";
+    if (mediaType === "tv" && genres.includes("16")) {
+      params.without_keywords = "210024";
+    }
   }
   if (filters.minRating) params["vote_average.gte"] = filters.minRating;
   if (filters.originalLanguage && !isAnime) {
@@ -273,17 +289,14 @@ export async function discoverWithMeta(filters: CatalogFilters, withFallback = f
     }
   }
 
-  const data = await tmdb<TmdbList>(`/discover/${mediaType}`, params);
-  const result = normalizeMeta(data, mediaType, withFallback);
-
-  if (mediaType === "tv" && !isAnime && genre) {
-    return {
-      ...result,
-      items: result.items.filter((item) => !isAnimeItem(item)),
-    };
+  let data = await tmdb<TmdbList>(`/discover/${mediaType}`, params);
+  const requestedPage = Number(params.page);
+  const availablePages = Math.max(1, Math.min(data?.total_pages ?? 1, 500));
+  if (data && requestedPage > availablePages) {
+    params.page = String(availablePages);
+    data = await tmdb<TmdbList>(`/discover/${mediaType}`, params);
   }
-
-  return result;
+  return normalizeMeta(data, mediaType, withFallback);
 }
 
 export async function search(query: string, mediaType?: string, withFallback = false) {
@@ -661,12 +674,57 @@ async function getNewCatalogWithMeta(mediaType: MediaType, page?: string) {
   const sourceCatalog = await getFstreamCatalog(mediaType, page);
   if (sourceCatalog.items.length) return sourceCatalog;
 
+  if (mediaType === "tv") {
+    const recentlyAired = await getRecentlyAiredSeries(page);
+    if (recentlyAired.items.length) return recentlyAired;
+  }
+
   return discoverWithMeta({
     catalog: "new",
     mediaType,
     sort: "new",
     page,
   });
+}
+
+async function getRecentlyAiredSeries(page?: string) {
+  const requestedPage = normalizedPage(page);
+  const data = await tmdb<TmdbList>("/discover/tv", {
+    sort_by: "popularity.desc",
+    include_adult: "false",
+    without_genres: "16,10763,10764,10767",
+    with_type: "2|4",
+    "vote_count.gte": "80",
+    "air_date.gte": recentDateCutoff(),
+    "air_date.lte": today(),
+    page: requestedPage,
+  });
+  const candidates = normalizeList(data?.results, "tv", false).slice(0, 12);
+  const details = await Promise.all(
+    candidates.map((item) => tmdb<TmdbDetails>(`/tv/${item.id}`, {})),
+  );
+  const items = candidates.flatMap((item, index) => {
+    const episode = details[index]?.last_episode_to_air;
+    const episodeNumber = episode?.episode_number ?? 0;
+    if (!episodeNumber || !isRecentlyAired(episode?.air_date)) return [];
+    return [{
+      ...item,
+      recentEpisode: {
+        seasonNumber: episode?.season_number ?? null,
+        episodeNumber,
+        totalEpisodes: null,
+        airDate: episode?.air_date ?? null,
+        source: "tmdb" as const,
+      },
+    }];
+  });
+
+  return {
+    items,
+    page: data?.page ?? Number(requestedPage),
+    totalPages: Math.max(1, Math.min(data?.total_pages ?? 1, 500)),
+    totalResults: data?.total_results ?? items.length,
+  };
 }
 
 async function getFstreamCatalog(mediaType: MediaType, page?: string) {
@@ -711,6 +769,9 @@ function parseFstreamCatalog(html: string, mediaType: MediaType) {
 
     const rawTitle = card.find(".short-title").first().text().trim();
     const seasonMatch = rawTitle.match(/\s*-\s*Saison\s+(\d+)/i);
+    const episodeProgress = parseEpisodeProgress(
+      card.find(".mli-eps").first().text().trim(),
+    );
     const title =
       mediaType === "tv"
         ? rawTitle.replace(/\s*-\s*Saison\s+\d+.*$/i, "").trim()
@@ -731,6 +792,10 @@ function parseFstreamCatalog(html: string, mediaType: MediaType) {
       newsId,
       seasonNumber:
         mediaType === "tv" && seasonMatch ? Number(seasonMatch[1]) : null,
+      episodeNumber:
+        mediaType === "tv" ? episodeProgress?.episodeNumber ?? null : null,
+      totalEpisodes:
+        mediaType === "tv" ? episodeProgress?.totalEpisodes ?? null : null,
     });
   });
 
@@ -779,9 +844,23 @@ async function resolveSourceCatalogItem(
       source.seasonNumber,
     );
   }
-  return item && !item.overview && source.overview
-    ? { ...item, overview: source.overview }
-    : item;
+  if (!item) return null;
+  const withOverview =
+    !item.overview && source.overview
+      ? { ...item, overview: source.overview }
+      : item;
+  return mediaType === "tv" && source.episodeNumber
+    ? {
+        ...withOverview,
+        recentEpisode: {
+          seasonNumber: source.seasonNumber,
+          episodeNumber: source.episodeNumber,
+          totalEpisodes: source.totalEpisodes,
+          airDate: null,
+          source: "fstream" as const,
+        },
+      }
+    : withOverview;
 }
 
 export function posterUrl(path: string | null, size = "w342") {
@@ -908,7 +987,7 @@ async function getPersonCreditsWithMeta(
   const role = filters.personRole === "crew" ? "crew" : "cast";
   const requestedJob = filters.personJob?.toLocaleLowerCase("en");
   const credits = role === "crew" ? data?.crew ?? [] : data?.cast ?? [];
-  const genre = genreForMediaType(filters.genre, mediaType);
+  const genres = genreIdsForMediaType(filters.genre, mediaType);
   const seen = new Set<number>();
 
   const items = credits
@@ -927,7 +1006,7 @@ async function getPersonCreditsWithMeta(
       if (mediaType === "tv" && filters.catalog !== "anime" && isAnimeItem(item)) {
         return false;
       }
-      if (genre && !item.genreIds.includes(Number(genre))) return false;
+      if (genres.some((genre) => !item.genreIds.includes(Number(genre)))) return false;
       if (
         filters.originalLanguage &&
         item.originalLanguage !== filters.originalLanguage
@@ -967,7 +1046,7 @@ function emptyMeta() {
 function normalizedPage(page?: string) {
   const value = Number(page);
   if (!Number.isFinite(value)) return "1";
-  return String(Math.max(1, Math.floor(value)));
+  return String(Math.min(500, Math.max(1, Math.floor(value))));
 }
 
 function tmdbCacheKey(path: string, params: Record<string, string>) {
@@ -987,6 +1066,7 @@ function tmdbCacheTtl(path: string) {
   if (path.includes("/recommendations") || path.endsWith("/similar")) {
     return 12 * 60 * 60;
   }
+  if (/^\/tv\/\d+$/.test(path)) return 6 * 60 * 60;
   return 7 * 24 * 60 * 60;
 }
 
@@ -994,19 +1074,6 @@ function tmdbSort(sort: string | undefined, mediaType: MediaType) {
   if (sort === "rating") return "vote_average.desc";
   if (sort === "new") return mediaType === "movie" ? "primary_release_date.desc" : "first_air_date.desc";
   return "popularity.desc";
-}
-
-function genreForMediaType(genre: string | undefined, mediaType: MediaType) {
-  if (!genre) return undefined;
-  const movieGenres = new Set(["28", "12", "16", "35", "80", "99", "18", "14", "27", "9648", "10749", "878", "53"]);
-  const tvGenres = new Set(["10759", "16", "35", "80", "99", "18", "10751", "10765", "9648", "10768", "37"]);
-  if (mediaType === "movie" && movieGenres.has(genre)) return genre;
-  if (mediaType === "tv" && tvGenres.has(genre)) return genre;
-  if (mediaType === "movie" && genre === "10765") return "878";
-  if (mediaType === "tv" && genre === "878") return "10765";
-  if (mediaType === "movie" && genre === "10759") return "28";
-  if (mediaType === "tv" && (genre === "28" || genre === "12")) return "10759";
-  return undefined;
 }
 
 function normalizeItem(result: TmdbResult, forcedType?: MediaType): CatalogItem | null {

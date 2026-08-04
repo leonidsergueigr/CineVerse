@@ -1,6 +1,7 @@
 import "server-only";
 
 import { GENRES, SERIES_GENRES } from "@/lib/genres";
+import { sourceAffinityScore } from "@/lib/recommendation-scoring";
 import {
   discoverTasteCandidates,
   getCatalogItemsByIds,
@@ -13,6 +14,7 @@ import type {
   MediaType,
   PersonalizedRecommendation,
   RecommendationExposure,
+  RecommendationExclusion,
   RecommendationResult,
   WatchlistRecord,
 } from "@/lib/types";
@@ -24,7 +26,7 @@ const MAX_RESULTS = 18;
 
 type PositiveSeed = LikeRecord & {
   strength: number;
-  origin: "liked" | "completed" | "watchlist";
+  origin: "liked" | "completed" | "manual_legacy" | "watchlist";
 };
 
 type Candidate = {
@@ -40,6 +42,7 @@ export async function buildPersonalizedRecommendations(
   dislikes: DislikeRecord[] = [],
   exposures: RecommendationExposure[] = [],
   watchlist: WatchlistRecord[] = [],
+  exclusions: RecommendationExclusion[] = [],
 ): Promise<RecommendationResult> {
   const likedKeys = new Set(likes.map((like) => feedbackKey(like)));
   const seeds: PositiveSeed[] = [
@@ -54,7 +57,7 @@ export async function buildPersonalizedRecommendations(
       .map((item) => ({
         ...item,
         likedAt: item.addedAt,
-        strength: 0.45,
+        strength: 0.15,
         origin: "watchlist" as const,
       })),
   ];
@@ -102,7 +105,8 @@ export async function buildPersonalizedRecommendations(
   });
 
   negativeSignals.forEach((item, index) => {
-    const recencyWeight = Math.max(0.5, 0.9 - index * 0.035);
+    const recencyWeight =
+      Math.max(0.5, 0.9 - index * 0.035) * (item.signalStrength ?? 1);
     if (item.originalLanguage) {
       addWeight(languagePenalties, item.originalLanguage, recencyWeight);
     }
@@ -136,8 +140,16 @@ export async function buildPersonalizedRecommendations(
     mergeCandidate(candidates, item, "discovery"),
   );
 
-  const positiveKeys = new Set(seeds.map((seed) => feedbackKey(seed)));
-  const dislikedKeys = new Set(dislikes.map((item) => feedbackKey(item)));
+  const excludedKeys = new Set([
+    ...likes.map((item) => feedbackKey(item)),
+    ...watchlist.map((item) => feedbackKey(item)),
+    ...exclusions.map((item) => feedbackKey(item)),
+  ]);
+  const dislikedKeys = new Set(
+    dislikes
+      .filter((item) => item.exactExclusion !== false)
+      .map((item) => feedbackKey(item)),
+  );
   const exposureByItem = new Map(
     exposures.map((item) => [
       `${item.mediaType}:${item.tmdbId}`,
@@ -146,14 +158,9 @@ export async function buildPersonalizedRecommendations(
   );
   const scored = [...candidates.values()]
     .filter(
-      ({ item }) => {
-        const exposure = exposureByItem.get(itemKey(item));
-        return (
-          !positiveKeys.has(itemKey(item)) &&
-          !dislikedKeys.has(itemKey(item)) &&
-          !isCoolingDown(exposure)
-        );
-      },
+      ({ item }) =>
+        !excludedKeys.has(itemKey(item)) &&
+        !dislikedKeys.has(itemKey(item)),
     )
     .map((candidate) =>
       scoreCandidate(
@@ -168,10 +175,15 @@ export async function buildPersonalizedRecommendations(
     )
     .filter((item) => item.posterUrl && item.voteCount > 0)
     .sort((a, b) => b.score - a.score);
+  const freshScored = scored.filter(
+    (item) => !isCoolingDown(exposureByItem.get(itemKey(item))),
+  );
+  const recommendationPool =
+    freshScored.length >= Math.min(6, scored.length) ? freshScored : scored;
 
   const topGenres = aggregateGenreProfile(genreWeights);
   return {
-    items: diversify(scored, MAX_RESULTS),
+    items: diversify(recommendationPool, MAX_RESULTS),
     strategy: scored.length ? "personalized" : "empty",
     profile: {
       ...emptyProfile,
@@ -241,9 +253,7 @@ function scoreCandidate(
       Math.max(0, exposure.shownCount - 1) * 0.75
     : 0;
   const score =
-    candidate.recommendationHits * 8 +
-    candidate.similarHits * 4 +
-    candidate.discoveryHits * 1.5 +
+    sourceAffinityScore(candidate) +
     genreScore * 1.8 +
     languageScore +
     negativeGenreScore * -1.15 +
@@ -387,7 +397,10 @@ function itemKey(item: Pick<CatalogItem, "id" | "mediaType">) {
 }
 
 function feedbackKey(
-  item: Pick<LikeRecord | DislikeRecord, "tmdbId" | "mediaType">,
+  item: Pick<
+    LikeRecord | DislikeRecord | WatchlistRecord | RecommendationExclusion,
+    "tmdbId" | "mediaType"
+  >,
 ) {
   return `${item.mediaType}:${item.tmdbId}`;
 }

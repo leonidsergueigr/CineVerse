@@ -3,6 +3,7 @@ import type Database from "better-sqlite3";
 const HYBRID_TRACKING_MIGRATION = "hybrid-watch-tracking-v1";
 const BROWSER_EXTENSION_TRACKING_MIGRATION = "browser-extension-tracking-v2";
 const PLAYBACK_INTELLIGENCE_MIGRATION = "playback-intelligence-v3";
+const TASTE_HISTORY_MIGRATION = "taste-history-v4";
 
 export function applyWatchTrackingSchema(database: Database.Database) {
   database.exec(`
@@ -103,6 +104,20 @@ export function applyWatchTrackingSchema(database: Database.Database) {
       updated_at integer not null,
       unique(profile_id, tmdb_id, season_number, segment_type)
     );
+
+    create table if not exists recommendation_suppressions (
+      id integer primary key autoincrement,
+      profile_id text not null,
+      tmdb_id integer not null,
+      media_type text not null check (media_type in ('movie', 'tv')),
+      reason text not null check (reason in ('not-now', 'never')),
+      expires_at integer,
+      created_at integer not null,
+      unique(profile_id, tmdb_id, media_type)
+    );
+
+    create index if not exists recommendation_suppressions_profile_expiry
+      on recommendation_suppressions(profile_id, expires_at);
   `);
 
   ensureColumn(database, "watch_history", "completion_source", "text not null default 'unknown'");
@@ -110,6 +125,19 @@ export function applyWatchTrackingSchema(database: Database.Database) {
   ensureColumn(database, "watch_history", "manual_marked_at", "integer");
   ensureColumn(database, "watch_history", "estimated_watch_seconds", "integer not null default 0");
   ensureColumn(database, "watch_history", "provider_watch_seconds", "integer not null default 0");
+  ensureColumn(database, "watch_history", "imported_at", "integer");
+  ensureColumn(database, "watch_history", "watched_at", "integer");
+  ensureColumn(database, "watch_history", "history_origin", "text not null default 'tracking'");
+
+  if (tableExists(database, "user_likes")) {
+    ensureColumn(database, "user_likes", "signal_strength", "real not null default 1");
+    ensureColumn(database, "user_likes", "signal_origin", "text not null default 'liked'");
+  }
+  if (tableExists(database, "user_dislikes")) {
+    ensureColumn(database, "user_dislikes", "signal_strength", "real not null default 1");
+    ensureColumn(database, "user_dislikes", "signal_origin", "text not null default 'explicit'");
+    ensureColumn(database, "user_dislikes", "exact_exclusion", "integer not null default 1");
+  }
 
   ensureColumn(database, "viewing_events", "completion_source", "text not null default 'unknown'");
   ensureColumn(database, "viewing_events", "tracking_confidence", "text not null default 'low'");
@@ -195,6 +223,15 @@ export function applyWatchTrackingSchema(database: Database.Database) {
       .prepare("insert into app_migrations (id, applied_at) values (?, ?)")
       .run(PLAYBACK_INTELLIGENCE_MIGRATION, Date.now());
   }
+
+  const tasteHistoryApplied = database
+    .prepare("select 1 from app_migrations where id = ? limit 1")
+    .get(TASTE_HISTORY_MIGRATION);
+  if (!tasteHistoryApplied) {
+    database
+      .prepare("insert into app_migrations (id, applied_at) values (?, ?)")
+      .run(TASTE_HISTORY_MIGRATION, Date.now());
+  }
 }
 
 function ensureColumn(
@@ -208,4 +245,14 @@ function ensureColumn(
   }>;
   if (columns.some((item) => item.name === column)) return;
   database.exec(`alter table ${table} add column ${column} ${definition}`);
+}
+
+function tableExists(database: Database.Database, table: string) {
+  return Boolean(
+    database
+      .prepare(
+        "select 1 from sqlite_master where type = 'table' and name = ? limit 1",
+      )
+      .get(table),
+  );
 }

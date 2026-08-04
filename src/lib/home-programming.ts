@@ -6,6 +6,7 @@ import type {
   CatalogSection,
   HomeCatalog,
   RecommendationExposure,
+  RecommendationExclusion,
   RecommendationResult,
 } from "@/lib/types";
 
@@ -19,6 +20,7 @@ export function composeHomeProgramming({
   watchlist,
   recommendations,
   exposures,
+  exclusions,
   now = new Date(),
 }: {
   catalog: HomeCatalog;
@@ -26,6 +28,7 @@ export function composeHomeProgramming({
   watchlist: CatalogItem[];
   recommendations: RecommendationResult;
   exposures: RecommendationExposure[];
+  exclusions: RecommendationExclusion[];
   now?: Date;
 }): HomeCatalog {
   const sessionId = randomUUID();
@@ -35,16 +38,32 @@ export function composeHomeProgramming({
       item,
     ]),
   );
+  const excludedKeys = new Set(
+    exclusions.map((item) => mediaKey(item.mediaType, item.tmdbId)),
+  );
   const hour = now.getHours();
   const weekend = [0, 6].includes(now.getDay());
   const contextSeed = hash(`${sessionId}:${hour}:${now.getDay()}`);
-  const availableRecommendations = recommendations.items.filter(
+  const allowedRecommendations = recommendations.items.filter(
+    (item) => !excludedKeys.has(itemKey(item)),
+  );
+  const freshRecommendations = allowedRecommendations.filter(
     (item) => !isCoolingDown(exposureMap.get(itemKey(item))),
   );
-  const availableEditorial = uniqueItems([
+  const availableRecommendations =
+    freshRecommendations.length >= Math.min(6, allowedRecommendations.length)
+      ? freshRecommendations
+      : allowedRecommendations;
+  const allowedEditorial = uniqueItems([
     ...catalog.heroCandidates,
     ...catalog.sections.flatMap((section) => section.items),
-  ]).filter((item) => !isCoolingDown(exposureMap.get(itemKey(item))));
+  ]).filter((item) => !excludedKeys.has(itemKey(item)));
+  const freshEditorial = allowedEditorial.filter(
+    (item) => !isCoolingDown(exposureMap.get(itemKey(item))),
+  );
+  const availableEditorial = freshEditorial.length
+    ? freshEditorial
+    : allowedEditorial;
   const heroPool = chooseHeroPool({
     continueWatching,
     recommendations: availableRecommendations,
@@ -110,13 +129,19 @@ export function composeHomeProgramming({
       const original = uniqueItems(section.items);
       const respectsExposure =
         section.id !== "resume" && section.id !== "watchlist";
-      const eligible = respectsExposure
-        ? original.filter(
+      const allowed = respectsExposure
+        ? original.filter((item) => !excludedKeys.has(itemKey(item)))
+        : original;
+      const fresh = respectsExposure
+        ? allowed.filter(
             (item) => !isCoolingDown(exposureMap.get(itemKey(item))),
           )
-        : original;
+        : allowed;
+      const minimumItems =
+        section.id === "resume" || section.id === "watchlist" ? 1 : 2;
+      const eligible = fresh.length >= minimumItems ? fresh : allowed;
       const refreshed = refreshShelf(
-        eligible.length >= 2 ? eligible : original,
+        eligible,
         `${sessionId}:${section.id}`,
         exposureMap,
       );
@@ -128,8 +153,6 @@ export function composeHomeProgramming({
         items.push(item);
         used.add(key);
       }
-      const minimumItems =
-        section.id === "resume" || section.id === "watchlist" ? 1 : 2;
       if (items.length < minimumItems) {
         for (const item of refreshed) {
           if (items.length >= minimumItems) break;
@@ -241,8 +264,11 @@ function shelfPresentation(id: string, hour: number, weekend: boolean) {
       priority: weekend || evening ? 94 : 82,
     },
     "new-series": {
-      title: evening ? "Une nouvelle serie pour ce soir" : "Nouvelles series",
-      reason: "Des series recentes que vous n'avez pas encore croisees ici.",
+      title: evening
+        ? "Nouveaux episodes pour ce soir"
+        : "Nouveaux episodes et series",
+      reason:
+        "Des premieres recentes et des series qui viennent de diffuser un nouvel episode.",
       priority: evening && !weekend ? 96 : 88,
     },
     movies: {

@@ -135,6 +135,174 @@ select option {
   animation: progress-fill 700ms ease-out both;
 }
 
+.cineverse-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: #020202;
+  opacity: 1;
+  isolation: isolate;
+}
+
+html[data-cineverse-splash="seen"] .cineverse-splash {
+  display: none;
+}
+
+.cineverse-splash::before,
+.cineverse-splash::after {
+  position: absolute;
+  inset-inline: 0;
+  height: 1px;
+  content: "";
+  background: rgba(242, 13, 25, 0.28);
+  opacity: 0;
+  transform: scaleX(0);
+  animation: splash-scan-line 900ms ease-out 1.25s both;
+}
+
+.cineverse-splash::before {
+  top: calc(50% - 180px);
+}
+
+.cineverse-splash::after {
+  bottom: calc(50% - 180px);
+  animation-delay: 1.34s;
+}
+
+.cineverse-splash.is-exiting {
+  pointer-events: none;
+  animation: splash-exit 420ms cubic-bezier(0.5, 0, 0.75, 0) both;
+}
+
+.cineverse-splash__skip {
+  position: absolute;
+  top: max(1rem, env(safe-area-inset-top));
+  right: max(1rem, env(safe-area-inset-right));
+  z-index: 2;
+  display: grid;
+  width: 2.5rem;
+  height: 2.5rem;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 50%;
+  background: rgba(16, 16, 16, 0.78);
+  color: #a1a1aa;
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    border-color 160ms ease,
+    color 160ms ease,
+    background 160ms ease;
+  animation: splash-skip-enter 220ms ease-out 900ms both;
+}
+
+.cineverse-splash__skip:hover,
+.cineverse-splash__skip:focus-visible {
+  border-color: rgba(255, 255, 255, 0.32);
+  background: #171717;
+  color: #f7f7f7;
+  outline: none;
+}
+
+.cineverse-splash__stage {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  width: min(82vw, 30rem);
+  transform: translateY(-1rem);
+}
+
+.cineverse-splash__mark {
+  width: clamp(11rem, 30vw, 16rem);
+  height: auto;
+  overflow: visible;
+}
+
+.cineverse-splash__ribbon,
+.cineverse-splash__c {
+  fill: none;
+  stroke: #f20d19;
+  stroke-width: 34;
+  stroke-linecap: square;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 0 12px rgba(242, 13, 25, 0.22));
+}
+
+.cineverse-splash__ribbon {
+  animation:
+    splash-ribbon-enter 560ms cubic-bezier(0.2, 0.75, 0.2, 1) 80ms forwards,
+    splash-ribbon-release 300ms ease-in 620ms forwards;
+}
+
+.cineverse-splash__c {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: splash-draw-c 900ms cubic-bezier(0.3, 0.7, 0.2, 1) 510ms forwards;
+}
+
+.cineverse-splash__play {
+  fill: #f7f7f7;
+  opacity: 0;
+  transform: scale(0.25) rotate(-8deg);
+  transform-box: fill-box;
+  transform-origin: center;
+  filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.18));
+  animation: splash-play-click 520ms cubic-bezier(0.34, 1.56, 0.64, 1) 1.22s forwards;
+}
+
+.cineverse-splash__pulse {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.58);
+  stroke-width: 2;
+  opacity: 0;
+  transform: scale(0.7);
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.cineverse-splash__pulse.pulse-one {
+  animation: splash-play-pulse 600ms ease-out 1.52s both;
+}
+
+.cineverse-splash__pulse.pulse-two {
+  animation: splash-play-pulse 620ms ease-out 1.68s both;
+}
+
+.cineverse-splash__signature {
+  display: grid;
+  justify-items: center;
+  margin-top: -0.85rem;
+}
+
+.cineverse-splash__wordmark {
+  color: #f7f7f7;
+  font-size: clamp(1.65rem, 6vw, 2.45rem);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  opacity: 0;
+  transform: translateY(10px);
+  animation: splash-wordmark-enter 360ms ease-out 1.62s forwards;
+}
+
+.cineverse-splash__wordmark span {
+  color: #f20d19;
+}
+
+.cineverse-splash__tagline {
+  margin-top: 0.75rem;
+  color: #a1a1aa;
+  font-size: clamp(0.66rem, 2.3vw, 0.78rem);
+  letter-spacing: 0.06em;
+  opacity: 0;
+  animation: splash-tagline-enter 360ms ease-out 1.86s forwards;
+}
+
 @keyframes hero-backdrop-enter {
   from {
     opacity: 0.35;
@@ -185,6 +353,113 @@ select option {
   }
 }
 
+@keyframes splash-ribbon-enter {
+  0% {
+    stroke-dashoffset: 1;
+    transform: translate(-24px, -18px);
+  }
+  100% {
+    stroke-dashoffset: 0;
+    transform: translate(0, 0);
+  }
+}
+
+@keyframes splash-ribbon-release {
+  to {
+    opacity: 0;
+    transform: translate(18px, 14px);
+  }
+}
+
+@keyframes splash-draw-c {
+  0% {
+    stroke-dashoffset: 1;
+    transform: rotate(-10deg) scale(0.92);
+  }
+  70% {
+    stroke-dashoffset: 0;
+    transform: rotate(1deg) scale(1.015);
+  }
+  100% {
+    stroke-dashoffset: 0;
+    transform: rotate(0) scale(1);
+  }
+}
+
+@keyframes splash-play-click {
+  0% {
+    opacity: 0;
+    transform: scale(0.25) rotate(-8deg);
+  }
+  55% {
+    opacity: 1;
+    transform: scale(1.12) rotate(0);
+  }
+  75% {
+    opacity: 1;
+    transform: scale(0.92) rotate(0);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0);
+  }
+}
+
+@keyframes splash-play-pulse {
+  0% {
+    opacity: 0.75;
+    transform: scale(0.72);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.8);
+  }
+}
+
+@keyframes splash-wordmark-enter {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes splash-tagline-enter {
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes splash-scan-line {
+  0% {
+    opacity: 0;
+    transform: scaleX(0);
+  }
+  55% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: scaleX(0.72);
+  }
+}
+
+@keyframes splash-skip-enter {
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes splash-exit {
+  0% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.025);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .hero-backdrop-enter,
   .hero-backdrop-exit,
@@ -196,6 +471,34 @@ select option {
   .progress-fill {
     animation: none;
     transition: none;
+  }
+
+  .cineverse-splash::before,
+  .cineverse-splash::after,
+  .cineverse-splash__ribbon,
+  .cineverse-splash__c,
+  .cineverse-splash__play,
+  .cineverse-splash__pulse,
+  .cineverse-splash__wordmark,
+  .cineverse-splash__tagline,
+  .cineverse-splash__skip {
+    animation: none;
+  }
+
+  .cineverse-splash__ribbon {
+    display: none;
+  }
+
+  .cineverse-splash__c {
+    stroke-dashoffset: 0;
+  }
+
+  .cineverse-splash__play,
+  .cineverse-splash__wordmark,
+  .cineverse-splash__tagline,
+  .cineverse-splash__skip {
+    opacity: 1;
+    transform: none;
   }
 
   .catalog-row-reveal,

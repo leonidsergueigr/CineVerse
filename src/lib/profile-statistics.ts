@@ -47,6 +47,8 @@ type HistoryRow = {
   completed: 0 | 1;
   completion_source: CompletionSource;
   series_episode_counts: string;
+  imported_at: number | null;
+  watched_at: number | null;
   updated_at: string;
 };
 
@@ -163,7 +165,8 @@ export function getProfileStats(profileId: string): ProfileStats {
     (item) =>
       item.completed &&
       (item.completion_source === "manual" ||
-        item.completion_source === "hybrid"),
+        item.completion_source === "hybrid" ||
+        item.completion_source === "manual_legacy"),
   ).length;
   const automaticCompletions = history.filter(
     (item) =>
@@ -397,9 +400,14 @@ export function getProfileStats(profileId: string): ProfileStats {
       label: monthLabel(now, offset),
       watchSeconds: currentMonthSeconds,
       completedCount: history.filter(
-        (item) =>
-          item.completed &&
-          localMonth(historyTimestamp(item.updated_at), offset) === currentMonth,
+        (item) => {
+          const completedAt = historyCompletionTimestamp(item);
+          return Boolean(
+            item.completed &&
+              completedAt !== null &&
+              localMonth(completedAt, offset) === currentMonth,
+          );
+        },
       ).length,
       topTitle: recapTitleKey?.split(":").slice(2).join(":") || null,
       topGenre:
@@ -422,7 +430,7 @@ export function getProfileStats(profileId: string): ProfileStats {
 function buildSeriesGroups(history: HistoryRow[]) {
   const groups = new Map<number, HistoryRow[]>();
   history
-    .filter((item) => item.media_type === "tv")
+    .filter((item) => item.media_type === "tv" && !item.imported_at)
     .forEach((item) => {
       const group = groups.get(item.tmdb_id) ?? [];
       group.push(item);
@@ -1001,7 +1009,7 @@ function regularityStats(
     if (event.eventType === "PLAY_STARTED") day.starts += 1;
     days.set(key, day);
   });
-  history.forEach((item) => {
+  history.filter((item) => !item.imported_at).forEach((item) => {
     const timestamp = historyTimestamp(item.updated_at);
     if (!Number.isFinite(timestamp)) return;
     const key = localDay(timestamp, offset);
@@ -1281,6 +1289,12 @@ function historyTimestamp(value: string) {
     : `${value.replace(" ", "T")}Z`;
   const timestamp = Date.parse(normalized);
   return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function historyCompletionTimestamp(item: HistoryRow) {
+  if (item.watched_at) return item.watched_at;
+  if (item.imported_at) return null;
+  return historyTimestamp(item.updated_at);
 }
 
 function parseObject(value: string): Record<string, unknown> {
