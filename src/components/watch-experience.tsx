@@ -39,7 +39,10 @@ import {
   parseCineVerseCompanionMessage,
 } from "@/lib/provider-tracking";
 import { useWatchSessionTracker } from "@/hooks/use-watch-session-tracker";
-import { rewindResumePosition } from "@/lib/playback-intelligence-core";
+import {
+  rewindResumePosition,
+  shouldRecordIntroSeekObservation,
+} from "@/lib/playback-intelligence-core";
 import { TRACKING_CONFIG } from "@/lib/watch-tracking";
 import { SiteHeader } from "@/components/site-header";
 import { SeriesHistoryImport } from "@/components/series-history-import";
@@ -171,6 +174,10 @@ export function WatchExperience({
   );
   const resumeAttemptsRef = useRef(0);
   const resumeAppliedRef = useRef(false);
+  const programmaticSeekRef = useRef<{
+    targetSeconds: number;
+    expiresAt: number;
+  } | null>(null);
 
   const provider = providers.find((item) => item.id === providerId) ?? providers[0];
   const languageOptions = useMemo(() => getProviderLanguages(provider), [provider]);
@@ -223,6 +230,7 @@ export function WatchExperience({
   if (playbackSelectionRef.current !== playbackSelectionKey) {
     playbackSelectionRef.current = playbackSelectionKey;
     activeObserverSessionRef.current = "";
+    programmaticSeekRef.current = null;
     playbackSelectionChangedAtRef.current = Date.now();
   }
   const playerSrc = useMemo(
@@ -605,6 +613,10 @@ export function WatchExperience({
     }
 
     resumeAttemptsRef.current += 1;
+    programmaticSeekRef.current = {
+      targetSeconds: target,
+      expiresAt: Date.now() + 5_000,
+    };
     sendCompanionCommand("seek", target);
     playerWindow.postMessage({ action: "seek", value: target }, "*");
     playerWindow.postMessage({ action: "seek", time: target }, "*");
@@ -717,16 +729,37 @@ export function WatchExperience({
         : playbackEvent;
       void reportProviderSignal(trackingSignal).catch(() => undefined);
 
+      const pendingProgrammaticSeek = programmaticSeekRef.current;
+      const isProgrammaticSeek = Boolean(
+        playbackEvent.eventName === "seeked" &&
+          pendingProgrammaticSeek &&
+          pendingProgrammaticSeek.expiresAt >= Date.now() &&
+          playbackEvent.seekToSeconds !== null &&
+          playbackEvent.seekToSeconds !== undefined &&
+          Math.abs(
+            playbackEvent.seekToSeconds - pendingProgrammaticSeek.targetSeconds,
+          ) <= 5,
+      );
+      if (
+        isProgrammaticSeek ||
+        (pendingProgrammaticSeek && pendingProgrammaticSeek.expiresAt < Date.now())
+      ) {
+        programmaticSeekRef.current = null;
+      }
       if (
         detail.mediaType === "tv" &&
         playbackEvent.trackingMethod === "browser-extension" &&
         playbackEvent.eventName === "seeked" &&
+        !isProgrammaticSeek &&
         playbackEvent.seekFromSeconds !== null &&
         playbackEvent.seekFromSeconds !== undefined &&
         playbackEvent.seekToSeconds !== null &&
         playbackEvent.seekToSeconds !== undefined &&
-        playbackEvent.seekFromSeconds <= 20 &&
-        playbackEvent.seekToSeconds >= 30
+        shouldRecordIntroSeekObservation({
+          fromSeconds: playbackEvent.seekFromSeconds,
+          toSeconds: playbackEvent.seekToSeconds,
+          durationSeconds: playbackEvent.duration,
+        })
       ) {
         void recordPlaybackObservation(
           "intro",
@@ -1237,6 +1270,10 @@ export function WatchExperience({
   function skipIntroduction() {
     if (!learnedIntro) return;
     const target = Math.max(0, learnedIntro.endSeconds);
+    programmaticSeekRef.current = {
+      targetSeconds: target,
+      expiresAt: Date.now() + 5_000,
+    };
     sendCompanionCommand("seek", target);
     const playerWindow = playerFrameRef.current?.contentWindow;
     playerWindow?.postMessage({ action: "seek", value: target }, "*");
@@ -1761,11 +1798,28 @@ export function WatchExperience({
                     Intro {introSegment.disabled ? "desactivee" : "active"}
                   </button>
                   <label className="inline-flex items-center gap-1 text-zinc-500">
+                    debut
+                    <input
+                      type="number"
+                      min={0}
+                      max={TRACKING_CONFIG.introMaximumStartSeconds}
+                      defaultValue={Math.round(introSegment.startSeconds)}
+                      onBlur={(event) =>
+                        void updateLearnedSegment("intro", {
+                          startSeconds: Number(event.target.value),
+                        })
+                      }
+                      className="h-7 w-16 rounded bg-black/30 px-2 text-white ring-1 ring-white/10"
+                      aria-label="Debut de l'introduction en secondes"
+                    />
+                    s
+                  </label>
+                  <label className="inline-flex items-center gap-1 text-zinc-500">
                     fin
                     <input
                       type="number"
-                      min={30}
-                      max={300}
+                      min={TRACKING_CONFIG.introMinimumSkipSeconds}
+                      max={TRACKING_CONFIG.introMaximumSearchSeconds}
                       defaultValue={Math.round(introSegment.endSeconds)}
                       onBlur={(event) =>
                         void updateLearnedSegment("intro", {

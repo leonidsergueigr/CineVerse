@@ -2,6 +2,18 @@
 
 Les changements notables de CineVerse sont regroupes dans ce fichier.
 
+## Non publie
+
+### Lecture
+
+- L'apprentissage des introductions conserve maintenant le cold open et peut
+  reconnaitre une intro qui commence plusieurs minutes apres le debut.
+- Les recherches successives de la fin d'une intro, y compris les retours en
+  arriere apres un depassement, sont fusionnees en une seule observation par
+  episode.
+- Les seeks de reprise et ceux declenches par CineVerse sont exclus de
+  l'apprentissage afin de ne pas contaminer le modele.
+
 ## 1.0.0 - 2026-08-04
 
 Premiere version locale complete de CineVerse.

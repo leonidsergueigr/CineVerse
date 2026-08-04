@@ -4,6 +4,7 @@ import { getDb, getProfile } from "@/lib/store";
 import {
   calculateProviderScore,
   learnPlaybackSegment,
+  shouldRecordIntroSeekObservation,
   type PlaybackObservationSample,
 } from "@/lib/playback-intelligence-core";
 import { TRACKING_CONFIG } from "@/lib/watch-tracking";
@@ -226,6 +227,11 @@ export function updateLearnedPlaybackSegment(
     input.seasonNumber,
   ).find((segment) => segment.segmentType === input.segmentType);
   if (!existing) throw new Error("Segment introuvable.");
+  const startSeconds = nonNegative(input.startSeconds ?? existing.startSeconds);
+  const endSeconds = nonNegative(input.endSeconds ?? existing.endSeconds);
+  if (input.segmentType === "intro" && endSeconds <= startSeconds) {
+    throw new Error("La fin de l'introduction doit suivre son debut.");
+  }
   getDb()
     .prepare(
       `
@@ -238,8 +244,8 @@ export function updateLearnedPlaybackSegment(
     )
     .run(
       (input.disabled ?? existing.disabled) ? 1 : 0,
-      nonNegative(input.startSeconds ?? existing.startSeconds),
-      nonNegative(input.endSeconds ?? existing.endSeconds),
+      startSeconds,
+      endSeconds,
       nonNegative(input.remainingSeconds ?? existing.remainingSeconds),
       Date.now(),
       profileId,
@@ -348,7 +354,8 @@ function relearnSegment(
   const samples = getDb()
     .prepare(
       `
-      select episode_number as episodeNumber, from_seconds as fromSeconds,
+      select session_id as sessionId, episode_number as episodeNumber,
+        observed_at as observedAt, from_seconds as fromSeconds,
         to_seconds as toSeconds, duration_seconds as durationSeconds,
         remaining_seconds as remainingSeconds
       from playback_observations
@@ -411,7 +418,11 @@ function normalizeObservation(input: {
   const remainingSeconds = Math.max(0, durationSeconds - fromSeconds);
   if (
     input.observationType === "intro" &&
-    (fromSeconds > 20 || toSeconds - fromSeconds < 20)
+    !shouldRecordIntroSeekObservation({
+      fromSeconds,
+      toSeconds,
+      durationSeconds,
+    })
   ) {
     return null;
   }
