@@ -460,6 +460,39 @@ export function WatchExperience({
     season,
   ]);
 
+  const recordCreditsAtCurrentPosition = useCallback(() => {
+    const duration = firstPositiveNumber(
+      latestDurationRef.current,
+      officialDurationSeconds ?? 0,
+    );
+    const fromSeconds = firstPositiveNumber(fallbackProgressRef.current);
+    const remainingSeconds = Math.max(0, duration - fromSeconds);
+    const preciseTracking =
+      companionTrackingRef.current ||
+      trackingSnapshot?.trackingMethod === "browser-extension" ||
+      trackingSnapshot?.trackingMethod === "provider-message";
+    if (
+      detail.mediaType !== "tv" ||
+      !preciseTracking ||
+      duration <= 0 ||
+      remainingSeconds < 10 ||
+      remainingSeconds > 5 * 60
+    ) {
+      return;
+    }
+    void recordPlaybackObservation(
+      "credits",
+      fromSeconds,
+      duration,
+      duration,
+    ).catch(() => undefined);
+  }, [
+    detail.mediaType,
+    officialDurationSeconds,
+    recordPlaybackObservation,
+    trackingSnapshot?.trackingMethod,
+  ]);
+
   const advanceEpisode = useCallback((force = false, expectedKey?: string) => {
     if ((!force && !autoNext) || detail.mediaType !== "tv") return false;
     const key = playbackSelectionRef.current;
@@ -472,6 +505,7 @@ export function WatchExperience({
     }
     scheduledAutoNextKeyRef.current = "";
     setAutoNextCountdown(null);
+    recordCreditsAtCurrentPosition();
 
     const currentSeason = availableSeasons.find(
       (item) => item.seasonNumber === season,
@@ -525,7 +559,14 @@ export function WatchExperience({
       return true;
     }
     return false;
-  }, [autoNext, availableSeasons, detail.mediaType, episode, season]);
+  }, [
+    autoNext,
+    availableSeasons,
+    detail.mediaType,
+    episode,
+    recordCreditsAtCurrentPosition,
+    season,
+  ]);
 
   const cancelScheduledAutoNext = useCallback(() => {
     if (autoNextTimerRef.current) {
@@ -1026,34 +1067,6 @@ export function WatchExperience({
     replaceEpisodeUrl(season, nextEpisode);
   }
 
-  function recordCreditsAtCurrentPosition() {
-    const duration = firstPositiveNumber(
-      progress.duration,
-      latestDurationRef.current,
-      officialDurationSeconds ?? 0,
-    );
-    const fromSeconds = firstPositiveNumber(
-      progress.currentTime,
-      fallbackProgressRef.current,
-    );
-    const remainingSeconds = Math.max(0, duration - fromSeconds);
-    if (
-      detail.mediaType !== "tv" ||
-      !companionTrackingRef.current ||
-      duration <= 0 ||
-      remainingSeconds < 10 ||
-      remainingSeconds > 5 * 60
-    ) {
-      return;
-    }
-    void recordPlaybackObservation(
-      "credits",
-      fromSeconds,
-      duration,
-      duration,
-    ).catch(() => undefined);
-  }
-
   function startPlayback() {
     resumeTargetRef.current = completed
       ? 0
@@ -1429,11 +1442,11 @@ export function WatchExperience({
         />
       ) : null}
       <div className="relative" id="watch-player">
-        <div className="absolute inset-x-0 top-0 z-20 bg-gradient-to-b from-black to-transparent">
+        <div className="absolute inset-x-0 top-0 z-20 bg-gradient-to-b from-black to-transparent pointer-events-none">
           <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
             <Link
               href="/"
-              className="inline-flex h-10 w-10 items-center justify-center rounded bg-black/50 ring-1 ring-white/10 transition hover:bg-white hover:text-black"
+              className="inline-flex h-10 w-10 items-center justify-center rounded bg-black/50 ring-1 ring-white/10 transition hover:bg-white hover:text-black pointer-events-auto"
               aria-label="Retour"
             >
               <ArrowLeft className="h-5 w-5" />
@@ -1473,7 +1486,7 @@ export function WatchExperience({
               allow="autoplay *; fullscreen *; picture-in-picture *"
               allowFullScreen
               referrerPolicy="no-referrer"
-              sandbox="allow-presentation allow-same-origin allow-scripts"
+              //sandbox="allow-presentation allow-same-origin allow-scripts"
               className="h-full w-full border-0"
               title={`Lecteur ${detail.title}`}
             />
@@ -1865,6 +1878,27 @@ export function WatchExperience({
                       }
                       className="h-7 w-16 rounded bg-black/30 px-2 text-white ring-1 ring-white/10"
                       aria-label="Debut du generique en secondes"
+                    />
+                    s
+                  </label>
+                  <label className="inline-flex items-center gap-1 text-zinc-500">
+                    fin
+                    <input
+                      type="number"
+                      min={Math.max(60, Math.round(creditsSegment.startSeconds))}
+                      max={Math.max(60, Math.round(creditsSegment.endSeconds))}
+                      defaultValue={Math.round(creditsSegment.endSeconds)}
+                      onBlur={(event) =>
+                        void updateLearnedSegment("credits", {
+                          endSeconds: Number(event.target.value),
+                          remainingSeconds: Math.max(
+                            0,
+                            Number(event.target.value) - creditsSegment.startSeconds,
+                          ),
+                        })
+                      }
+                      className="h-7 w-16 rounded bg-black/30 px-2 text-white ring-1 ring-white/10"
+                      aria-label="Fin du generique en secondes"
                     />
                     s
                   </label>

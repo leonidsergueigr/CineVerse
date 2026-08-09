@@ -47,6 +47,7 @@ export function buildEmbedUrl(
   const season = String(options.seasonNumber ?? 1);
   const episode = String(options.episodeNumber ?? 1);
   const seasonEpisodePath = detail.mediaType === "tv" ? `/${season}/${episode}` : "";
+  const seasonEpisodeQuery = detail.mediaType === "tv" ? `&s=${season}&e=${episode}` : "";
   const values: Record<string, string> = {
     tmdbId: encodeURIComponent(String(detail.id)),
     mediaType: providerMediaType,
@@ -58,6 +59,7 @@ export function buildEmbedUrl(
     season: encodeURIComponent(season),
     episode: encodeURIComponent(episode),
     seasonEpisodePath,
+    seasonEpisodeQuery,
     autoplay: options.autoplay ? "1" : "0",
     autoNext: options.autoNext ? "1" : "0",
   };

@@ -70,7 +70,7 @@ export function shouldRecordIntroSeekObservation(input: {
     fromSeconds <= searchEnd &&
     toSeconds <= searchEnd &&
     Math.abs(toSeconds - fromSeconds) >=
-      TRACKING_CONFIG.introMinimumCorrectionSeconds
+      TRACKING_CONFIG.introMinimumSkipSeconds
   );
 }
 
@@ -218,15 +218,15 @@ function buildIntroCandidates(samples: PlaybackObservationSample[]) {
           continue;
         }
         const correctedLength = correction.toSeconds - initial.fromSeconds;
-        lastLandingSeconds = correction.toSeconds;
-        lastObservedAt = correction.observedAt;
-        consumedThrough = cursor;
         if (
           correctedLength >= TRACKING_CONFIG.introMinimumSkipSeconds &&
           correctedLength <= TRACKING_CONFIG.introMaximumSegmentSeconds
         ) {
           endSeconds = correction.toSeconds;
           correctionCount += 1;
+          lastLandingSeconds = correction.toSeconds;
+          lastObservedAt = correction.observedAt;
+          consumedThrough = cursor;
         }
       }
 
