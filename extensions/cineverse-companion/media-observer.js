@@ -5,6 +5,30 @@ let nextMediaId = 1;
 const MAX_FOREGROUND_SAMPLE_GAP_SECONDS = 45;
 const MAX_BACKGROUND_SAMPLE_GAP_SECONDS = 300;
 
+// Detecte le provider a partir du domaine courant. Permet d'identifier
+// 2embed et ses miroirs dynamiques (vibuxer.com, etc.) meme lorsqu'ils ne
+// sont pas listes statiquement dans le manifeste.
+const TWOEMBED_PATTERNS = [
+  /(^|\.)2embed\.(online|stream|cc|to|ru|vip)$/i,
+  /(^|\.)2e\.to$/i,
+  /(^|\.)vibuxer\.com$/i,
+];
+
+function detectProvider() {
+  const hostname = window.location.hostname.toLowerCase();
+  if (TWOEMBED_PATTERNS.some((pattern) => pattern.test(hostname))) {
+    return "2embed";
+  }
+  if (/(^|\.)superembed\.\w+$/i.test(hostname)) return "superembed";
+  if (/(^|\.)vidlink\.pro$/i.test(hostname)) return "vidlink";
+  if (/(^|\.)(vidzy\.org|vidzy\.cc)$/i.test(hostname)) return "vidzy";
+  if (/(^|\.)(uqload\.(is|com|co|to))$/i.test(hostname)) return "uqload";
+  if (/(^|\.)voe\.sx$/i.test(hostname)) return "voe";
+  if (/(^|\.)(kakaflix\.lol|kokoflix\.lol)$/i.test(hostname)) return "dood";
+  if (/(^|\.)(filmoon\.sx|netu\.tv|waaw\.to)$/i.test(hostname)) return "netu";
+  return hostname || undefined;
+}
+
 const IMMEDIATE_EVENTS = new Set([
   "play",
   "playing",
@@ -222,6 +246,7 @@ function emit(video, eventName, immediate) {
         volume: finite(video.volume),
         pageOrigin: window.location.origin,
         pagePath: window.location.pathname,
+        providerName: detectProvider(),
       },
     })
     .catch(() => undefined);

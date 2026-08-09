@@ -63,6 +63,28 @@ const DEFAULT_CAPABILITIES = {
   postMessage: false,
 };
 
+// Domaines 2Embed connus et leurs miroirs courants. Ces domaines sont
+// consideres comme des wrappers de confiance meme si le .env ne les liste pas.
+const DEFAULT_TRUSTED_WRAPPER_HOSTNAMES = new Set([
+  "streamingnow.mov",
+  "2embed.online",
+  "www.2embed.online",
+  "2embed.stream",
+  "www.2embed.stream",
+  "2embed.cc",
+  "www.2embed.cc",
+  "2embed.to",
+  "www.2embed.to",
+  "2embed.ru",
+  "www.2embed.ru",
+  "2embed.vip",
+  "www.2embed.vip",
+  "2e.to",
+  "www.2e.to",
+  "vibuxer.com",
+  "www.vibuxer.com",
+]);
+
 const VIDEOJS_MESSAGE_CAPABILITIES = {
   autoplay: true,
   progressTracking: true,
@@ -385,6 +407,10 @@ export function getAllowedPlayerFrameOrigins() {
     }
   }
 
+  for (const hostname of getTrustedWrapperHostnames()) {
+    origins.add(`https://${hostname}`);
+  }
+
   const configuredProviders = parseJsonArray(
     process.env.CINEVERSE_EMBED_PROVIDERS_JSON,
   );
@@ -396,6 +422,9 @@ export function getAllowedPlayerFrameOrigins() {
 
   return Array.from(origins);
 }
+
+
+
 
 function getExtraPlayerHostnames(hostId: PlayerHostId) {
   const result = new Set<string>();
@@ -413,6 +442,41 @@ function getExtraPlayerHostnames(hostId: PlayerHostId) {
     return result;
   }
   return result;
+}
+
+// nouvelle fonction, a placer pres de getExtraPlayerHostnames
+function getTrustedWrapperHostnames(): Set<string> {
+  const result = new Set<string>(DEFAULT_TRUSTED_WRAPPER_HOSTNAMES);
+  const raw = process.env.CINEVERSE_TRUSTED_WRAPPER_HOSTS_JSON;
+  if (!raw) return result;
+
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return result;
+    for (const value of parsed) {
+      const hostname = normalizeHostname(value);
+      if (hostname) result.add(hostname);
+    }
+  } catch {
+    return result;
+  }
+  return result;
+}
+
+// nouvelle fonction exportee, utilisee par la route superembed-player
+export function isTrustedPlayerHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  if (getTrustedWrapperHostnames().has(normalized)) return true;
+
+  for (const host of Object.values(PLAYER_HOST_REGISTRY)) {
+    if (host.origins.some((origin) => origin.hostname === normalized)) {
+      return true;
+    }
+    if (getExtraPlayerHostnames(host.id).has(normalized)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function normalizeHostname(value: unknown) {

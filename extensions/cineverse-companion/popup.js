@@ -51,7 +51,7 @@ function render(status) {
   details.hidden = false;
   dot.className = `status-dot ${state}`;
   text("state", labels[state] || "Etat du lecteur inconnu");
-  text("provider", hostname(payload.pageOrigin));
+  text("provider", providerLabel(payload, hostname(payload.pageOrigin)));
   text("position", formatTime(currentTime));
   text("duration", formatTime(duration));
   text("watched", formatTime(finite(payload.watchedSeconds)));
@@ -86,6 +86,23 @@ function hostname(value) {
   } catch {
     return "Provider detecte";
   }
+}
+
+function providerLabel(payload, fallback) {
+  const providerName = String(payload?.providerName || "").trim();
+  if (!providerName) return fallback;
+  const knownProviders = {
+    "2embed": "2Embed",
+    superembed: "SuperEmbed",
+    vidlink: "VidLink",
+    vidzy: "Vidzy",
+    uqload: "Uqload",
+    voe: "Voe",
+    dood: "Dood",
+    netu: "Netu",
+  };
+  if (knownProviders[providerName]) return knownProviders[providerName];
+  return `${providerName} (${fallback})`;
 }
 
 function relativeAge(timestamp) {

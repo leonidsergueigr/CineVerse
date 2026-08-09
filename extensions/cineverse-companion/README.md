@@ -37,6 +37,22 @@ providers inscrits dans `src/lib/streaming.ts`. Si un domaine de player est
 ajoute par configuration, ajouter aussi son pattern HTTPS dans `manifest.json`,
 puis recharger l'extension.
 
+### 2Embed et ses miroirs
+
+Le provider 2Embed redirige systematiquement vers des domaines miroirs
+ephemeres (par exemple `vibuxer.com`). L'extension :
+
+1. liste statiquement les domaines 2Embed connus
+   (`2embed.online`, `2embed.stream`, `2embed.cc`, `2embed.to`, `2embed.ru`,
+   `2embed.vip`, `2e.to`, `vibuxer.com`) dans `manifest.json` ;
+2. observe dynamiquement, via `webNavigation` + `scripting`, tout sous-frame
+   https inconnu susceptible de contenir une balise video, et y injecte
+   `media-observer.js` a la volee.
+
+Ainsi, un nouveau miroir 2Embed utilise par le backend est detecte et suivi
+sans mise a jour du manifeste. Le label du provider (2Embed, domaines connus)
+est expose dans le payload `providerName` et affiche dans le popup.
+
 ## Limites
 
 - Une video placee dans un domaine non autorise ne peut pas etre observee.

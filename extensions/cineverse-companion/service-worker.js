@@ -4,6 +4,28 @@ const POPUP_CHANNEL = "cineverse-companion-popup-v1";
 const COMMAND_CHANNEL = "cineverse-companion-command-v1";
 const candidatesByTab = new Map();
 const activeCandidateByTab = new Map();
+const injectedFrames = new Set();
+
+// Familles de domaines connus pour lesquels on observe deja statiquement.
+const KNOWN_PLAYER_PATTERNS = [
+  /(^|\.)vidzy\.org$/i,
+  /(^|\.)vidzy\.cc$/i,
+  /(^|\.)uqload\.(is|com|co|to)$/i,
+  /(^|\.)voe\.sx$/i,
+  /(^|\.)kokoflix\.lol$/i,
+  /(^|\.)kakaflix\.lol$/i,
+  /(^|\.)filmoon\.sx$/i,
+  /(^|\.)netu\.tv$/i,
+  /(^|\.)waaw\.to$/i,
+  /(^|\.)vidlink\.pro$/i,
+  /(^|\.)multiembed\.mov$/i,
+  /(^|\.)streamingnow\.mov$/i,
+  /(^|\.)abyssplayer\.com$/i,
+  /(^|\.)stevenfamilyedge\.com$/i,
+  /(^|\.)2embed\.(online|stream|cc|to|ru|vip)$/i,
+  /(^|\.)2e\.to$/i,
+  /(^|\.)vibuxer\.com$/i,
+];
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.channel === POPUP_CHANNEL && message?.kind === "get-status") {
@@ -80,6 +102,50 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   candidatesByTab.delete(tabId);
   activeCandidateByTab.delete(tabId);
+  for (const key of injectedFrames) {
+    if (key.startsWith(`${tabId}:`)) injectedFrames.delete(key);
+  }
+});
+
+// Detection dynamique des miroirs 2embed : quand un frame est navigue vers un
+// domaine inconnu qui ressemble a un lecteur video, on injecte le script
+// d'observation. Cela couvre les miroirs ephemeres (vibuxer.com, etc.) qui ne
+// peuvent pas etre listes statiquement dans le manifeste.
+chrome.webNavigation.onCommitted.addListener((details) => {
+  if (
+    details.frameId === 0 ||
+    details.frameType !== "sub_frame" ||
+    details.tabId < 0 ||
+    !details.url.startsWith("https://")
+  ) {
+    return;
+  }
+
+  let hostname;
+  try {
+    hostname = new URL(details.url).hostname.toLowerCase();
+  } catch {
+    return;
+  }
+
+  // Deja couvert par le content script statique ?
+  if (KNOWN_PLAYER_PATTERNS.some((pattern) => pattern.test(hostname))) {
+    return;
+  }
+
+  // Domaine inconnu : on observe le frame pour y trouver une balise video.
+  const frameKey = `${details.tabId}:${details.frameId}`;
+  if (injectedFrames.has(frameKey)) return;
+  injectedFrames.add(frameKey);
+
+  chrome.scripting
+    .executeScript({
+      target: { tabId: details.tabId, frameIds: [details.frameId] },
+      files: ["media-observer.js"],
+    })
+    .catch(() => {
+      injectedFrames.delete(frameKey);
+    });
 });
 
 function selectActiveCandidate(candidates, currentKey, now) {
